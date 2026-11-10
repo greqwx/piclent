@@ -63,7 +63,6 @@ russian.PathWriteFailed=Не удалось записать PATH. Добавь�
 Name: "path"; Description: "{cm:TaskPath}"; GroupDescription: "{cm:TaskGroup}"
 Name: "assoc"; Description: "{cm:TaskAssoc}"; GroupDescription: "{cm:TaskGroup}"
 Name: "defaultapp"; Description: "{cm:TaskDefault}"; GroupDescription: "{cm:TaskGroup}"; Flags: unchecked
-Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
 
 [Files]
 Source: "payload\piclent-amd64.exe"; DestDir: "{app}"; DestName: "piclent.exe"; Flags: ignoreversion; Check: not IsArmMachine
@@ -72,7 +71,6 @@ Source: "..\license.txt"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\{#AppDisplayName}"; Filename: "{app}\piclent.exe"
-Name: "{autodesktop}\{#AppDisplayName}"; Filename: "{app}\piclent.exe"; Tasks: desktopicon
 
 [Registry]
 ; ProgID for the viewer, lives in HKCR (per-machine when installing for all users)
@@ -116,7 +114,6 @@ Root: HKA; Subkey: "Software\Microsoft\Windows\CurrentVersion\App Paths\piclent.
 
 [Run]
 Filename: "ms-settings:defaultapps?registeredAppUser=piclent"; Tasks: defaultapp; Flags: shellexec nowait skipifsilent
-Filename: "{app}\piclent.exe"; Description: "{cm:LaunchProgram,{#AppDisplayName}}"; Flags: nowait postinstall skipifsilent
 
 [Code]
 const
