@@ -15,6 +15,8 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
+	"strings"
 	"syscall"
 	"unsafe"
 )
@@ -31,23 +33,31 @@ type frame struct {
 	height int
 }
 
+// activeViewer keeps the viewer reachable for the process lifetime; the window
+// stores it as an integer via GWLP_USERDATA, which the garbage collector does
+// not scan
+var activeViewer *viewer
+
 func main() {
 	runtime.LockOSThread()
 	os.Exit(run())
 }
 
 func run() int {
-	if len(os.Args) != 2 {
-		fatal("usage: piclent <image>")
+	path, budgetMB, err := parseArgs(os.Args[1:])
+	if err != nil {
+		fatal("%v", err)
 		return 2
 	}
-	path := os.Args[1]
+	path = filepath.Clean(path)
 
 	config, err := readConfig(path)
 	if err != nil {
 		fatal("%v", err)
 		return 1
 	}
+
+	g := newGallery(path, budgetMB*1024*1024)
 
 	hInstance, _, _ := procGetModuleHandleW.Call(0)
 
@@ -107,7 +117,8 @@ func run() int {
 	procDwmSetWindowAttribute.Call(hwnd, dwmwaUseImmersiveDarkMode, uintptr(unsafe.Pointer(&darkMode)), unsafe.Sizeof(darkMode))
 
 	// store viewer pointer in window's user data
-	v := &viewer{hwnd: hwnd, zoom: minZoom}
+	v := &viewer{hwnd: hwnd, zoom: minZoom, gallery: g}
+	activeViewer = v
 	procSetWindowLongPtrW.Call(hwnd, gwlUserdata, uintptr(unsafe.Pointer(v)))
 
 	procShowWindow.Call(hwnd, swShow)
@@ -121,17 +132,8 @@ func run() int {
 		maxH = winH
 	}
 
-	go func() {
-		f, err := loadFrame(path, maxW, maxH)
-		if err != nil {
-			fatal("%v", err)
-			// post WM_CLOSE so the message loop exits
-			procPostMessageW.Call(hwnd, wmClose, 0, 0)
-			return
-		}
-		// pass frame pointer via lParam
-		procPostMessageW.Call(hwnd, wmUserFrame, 0, uintptr(unsafe.Pointer(f)))
-	}()
+	g.hwnd = hwnd
+	g.start(maxW, maxH)
 
 	var msg msgW
 	for {
@@ -149,13 +151,8 @@ func run() int {
 func wndProc(hwnd, msg, wParam, lParam uintptr) uintptr {
 	switch msg {
 	case wmUserFrame:
-		f := (*frame)(unsafe.Pointer(lParam))
-		v := getViewer(hwnd)
-		if v != nil {
-			v.pixels = f.pixels
-			v.width = f.width
-			v.height = f.height
-			procInvalidateRect.Call(hwnd, 0, 0)
+		if v := getViewer(hwnd); v != nil {
+			v.refresh()
 		}
 		return 0
 
@@ -189,7 +186,54 @@ func wndProc(hwnd, msg, wParam, lParam uintptr) uintptr {
 		}
 		return 0
 
-	case wmLButtonDown, wmRButtonDown:
+	case wmKeyDown:
+		v := getViewer(hwnd)
+		if v != nil {
+			switch int(uint16(wParam)) {
+			case vkLeft, vkPrior:
+				v.navigate(-1)
+				return 0
+			case vkRight, vkNext:
+				v.navigate(1)
+				return 0
+			}
+		}
+
+	case wmSetCursor:
+		if int(lParam&0xffff) == htClient {
+			if v := getViewer(hwnd); v != nil {
+				if v.dragging {
+					procSetCursor.Call(loadCursor(idcSizeAll))
+					return 1
+				}
+				var pt point
+				procGetCursorPos.Call(uintptr(unsafe.Pointer(&pt)))
+				procScreenToClient.Call(hwnd, uintptr(unsafe.Pointer(&pt)))
+				if v.buttonAt(int(pt.x), int(pt.y)) != 0 {
+					procSetCursor.Call(loadCursor(idcHand))
+					return 1
+				}
+			}
+		}
+
+	case wmLButtonDown:
+		v := getViewer(hwnd)
+		if v != nil {
+			x, y := mousePoint(lParam)
+			if direction := v.buttonAt(x, y); direction != 0 {
+				v.navigate(direction)
+				return 0
+			}
+			if !v.dragging {
+				v.dragging = true
+				v.dragX, v.dragY = x, y
+				procSetCapture.Call(hwnd)
+				procSetCursor.Call(loadCursor(idcSizeAll))
+			}
+		}
+		return 0
+
+	case wmRButtonDown:
 		v := getViewer(hwnd)
 		if v != nil && !v.dragging {
 			v.dragging = true
@@ -228,12 +272,53 @@ func wndProc(hwnd, msg, wParam, lParam uintptr) uintptr {
 	case wmDestroy:
 		if v := getViewer(hwnd); v != nil {
 			v.releaseBackBuffer()
+			v.releaseNavGlyphs()
 		}
 		procPostQuitMessage.Call(0)
 		return 0
 	}
 	r, _, _ := procDefWindowProcW.Call(hwnd, msg, wParam, lParam)
 	return r
+}
+
+func parseArgs(args []string) (string, int, error) {
+	const usage = "Drag & drop an image onto piclent.exe to open it."
+	budget := 256
+	path := ""
+
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch {
+		case arg == "-m" || arg == "--m":
+			if i+1 >= len(args) {
+				return "", 0, fmt.Errorf("%s", usage)
+			}
+			i++
+			value, err := strconv.Atoi(args[i])
+			if err != nil || value <= 0 {
+				return "", 0, fmt.Errorf("invalid memory limit: %s", args[i])
+			}
+			budget = value
+		case strings.HasPrefix(arg, "-m=") || strings.HasPrefix(arg, "--m="):
+			value, err := strconv.Atoi(arg[strings.Index(arg, "=")+1:])
+			if err != nil || value <= 0 {
+				return "", 0, fmt.Errorf("invalid memory limit: %s", arg)
+			}
+			budget = value
+		case strings.HasPrefix(arg, "-"):
+			return "", 0, fmt.Errorf("%s", usage)
+		default:
+			if path != "" {
+				return "", 0, fmt.Errorf("%s", usage)
+			}
+			path = arg
+		}
+	}
+
+	if path == "" {
+		return "", 0, fmt.Errorf("%s", usage)
+	}
+	return path, budget, nil
 }
 
 func mousePoint(lParam uintptr) (int, int) {
@@ -349,14 +434,14 @@ func initialWindowSize(imageWidth, imageHeight, areaWidth, areaHeight int) (int,
 	width, height := imageWidth, imageHeight
 
 	if areaWidth > 0 {
-		maxWidth := areaWidth * 9 / 10
+		maxWidth := max(areaWidth*9/10-2*imageInsetX, 1)
 		if width > maxWidth {
 			height = height * maxWidth / width
 			width = maxWidth
 		}
 	}
 	if areaHeight > 0 {
-		maxHeight := areaHeight * 9 / 10
+		maxHeight := max(areaHeight*9/10-2*imageInsetY, 1)
 		if height > maxHeight {
 			width = width * maxHeight / height
 			height = maxHeight
@@ -368,7 +453,7 @@ func initialWindowSize(imageWidth, imageHeight, areaWidth, areaHeight int) (int,
 	if height < 1 {
 		height = 1
 	}
-	return width, height
+	return width + 2*imageInsetX, height + 2*imageInsetY
 }
 
 func workArea() (x, y, width, height int) {

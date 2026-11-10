@@ -4,6 +4,7 @@ package main
 
 import (
 	"math"
+	"syscall"
 	"unsafe"
 )
 
@@ -11,13 +12,25 @@ const (
 	minZoom         = 1.0
 	maxZoom         = 8.0
 	wheelZoomFactor = 1.2
+
+	// nav button geometry and opacity
+	navButtonSize   = 30
+	navButtonMargin = 12
+	navButtonAlpha  = 0.75
+	navArrowAlpha   = 0.92
+
+	// dark borders around the image so it never sits under the nav buttons
+	imageInsetX = 56
+	imageInsetY = 28
 )
 
 type viewer struct {
-	hwnd   uintptr
-	pixels []byte
-	width  int
-	height int
+	hwnd    uintptr
+	gallery *gallery
+	pixels  []byte
+	width   int
+	height  int
+	message string
 
 	zoom    float64
 	offsetX float64
@@ -32,6 +45,9 @@ type viewer struct {
 	memOld    uintptr
 	memWidth  int
 	memHeight int
+
+	navPrev *navGlyph
+	navNext *navGlyph
 }
 
 type viewGeometry struct {
@@ -51,7 +67,11 @@ func (v *viewer) layout(clientWidth, clientHeight int) viewGeometry {
 	if v.zoom < minZoom {
 		v.zoom = minZoom
 	}
-	fitWidth, fitHeight := fitSize(v.width, v.height, clientWidth, clientHeight)
+	insetX, insetY := imageInsets(clientWidth, clientHeight)
+	innerWidth := clientWidth - 2*insetX
+	innerHeight := clientHeight - 2*insetY
+
+	fitWidth, fitHeight := fitSize(v.width, v.height, innerWidth, innerHeight)
 	if fitWidth <= 0 || fitHeight <= 0 {
 		return viewGeometry{}
 	}
@@ -64,12 +84,24 @@ func (v *viewer) layout(clientWidth, clientHeight int) viewGeometry {
 	v.offsetY = clampOffset(v.offsetY, drawHeight, clientHeight)
 
 	return viewGeometry{
-		x:      (clientWidth-drawWidth)/2 + int(math.Round(v.offsetX)),
-		y:      (clientHeight-drawHeight)/2 + int(math.Round(v.offsetY)),
+		x:      insetX + (innerWidth-drawWidth)/2 + int(math.Round(v.offsetX)),
+		y:      insetY + (innerHeight-drawHeight)/2 + int(math.Round(v.offsetY)),
 		width:  drawWidth,
 		height: drawHeight,
 		scale:  scale,
 	}
+}
+
+// imageInsets keeps dark borders at the window edges where the buttons live
+func imageInsets(width, height int) (int, int) {
+	insetX, insetY := imageInsetX, imageInsetY
+	if width-2*insetX < 1 {
+		insetX = 0
+	}
+	if height-2*insetY < 1 {
+		insetY = 0
+	}
+	return insetX, insetY
 }
 
 func clampOffset(offset float64, drawSize, clientSize int) float64 {
@@ -129,6 +161,102 @@ func (v *viewer) zoomAt(cursorX, cursorY int, factor float64) {
 	v.layout(width, height)
 
 	procInvalidateRect.Call(v.hwnd, 0, 0)
+}
+
+func (v *viewer) hasNavigation() bool {
+	return v.gallery != nil && v.gallery.count() > 1
+}
+
+// navigate switches to the neighboring image and resets the view
+func (v *viewer) navigate(direction int) {
+	if !v.hasNavigation() {
+		return
+	}
+	if !v.gallery.step(direction) {
+		return
+	}
+	v.zoom = minZoom
+	v.offsetX = 0
+	v.offsetY = 0
+	v.message = ""
+	v.updateTitle()
+	v.refresh()
+}
+
+func (v *viewer) updateTitle() {
+	if v.gallery == nil {
+		return
+	}
+	title, _ := syscall.UTF16PtrFromString(v.gallery.currentName())
+	procSetWindowTextW.Call(v.hwnd, uintptr(unsafe.Pointer(title)))
+}
+
+// refresh pulls the current frame from the cache or switches to its error
+func (v *viewer) refresh() {
+	if v.gallery == nil {
+		return
+	}
+	f, message := v.gallery.snapshot()
+	switch {
+	case message != "":
+		v.message = message
+		v.pixels = nil
+		v.width = 0
+		v.height = 0
+	case f != nil:
+		v.pixels = f.pixels
+		v.width = f.width
+		v.height = f.height
+		v.message = ""
+	}
+	procInvalidateRect.Call(v.hwnd, 0, 0)
+}
+
+func navButtonRects(width, height int) (winRect, winRect) {
+	size := navButtonSize
+	if height < size*3 {
+		size = max(height/3, size/2)
+	}
+	margin := navButtonMargin
+	top := (height - size) / 2
+	prev := winRect{
+		left:   int32(margin),
+		top:    int32(top),
+		right:  int32(margin + size),
+		bottom: int32(top + size),
+	}
+	next := winRect{
+		left:   int32(width - margin - size),
+		top:    int32(top),
+		right:  int32(width - margin),
+		bottom: int32(top + size),
+	}
+	return prev, next
+}
+
+func pointInRect(r winRect, x, y int) bool {
+	return int32(x) >= r.left && int32(x) < r.right && int32(y) >= r.top && int32(y) < r.bottom
+}
+
+// buttonAt returns -1 for the previous button, 1 for the next one, 0 for none
+func (v *viewer) buttonAt(x, y int) int {
+	if !v.hasNavigation() {
+		return 0
+	}
+	var rect winRect
+	if ok, _, _ := procGetClientRect.Call(v.hwnd, uintptr(unsafe.Pointer(&rect))); ok == 0 {
+		return 0
+	}
+	width := int(rect.right - rect.left)
+	height := int(rect.bottom - rect.top)
+	prev, next := navButtonRects(width, height)
+	if pointInRect(prev, x, y) {
+		return -1
+	}
+	if pointInRect(next, x, y) {
+		return 1
+	}
+	return 0
 }
 
 func (v *viewer) pan(dx, dy int) {
@@ -214,29 +342,39 @@ func (v *viewer) paint() {
 
 	procFillRect.Call(target, uintptr(unsafe.Pointer(&rect)), hBrush)
 
-	g := v.layout(width, height)
-	if len(v.pixels) > 0 && v.width > 0 && v.height > 0 && g.width > 0 && g.height > 0 {
-		procSetStretchBltMode.Call(target, halftone)
-		procSetBrushOrgEx.Call(target, 0, 0, 0)
+	if v.message != "" {
+		drawMessage(target, width, height, v.message)
+	} else if len(v.pixels) > 0 && v.width > 0 && v.height > 0 {
+		g := v.layout(width, height)
+		if g.width > 0 && g.height > 0 {
+			procSetStretchBltMode.Call(target, halftone)
+			procSetBrushOrgEx.Call(target, 0, 0, 0)
 
-		info := bitmapInfoHeader{
-			size:      uint32(unsafe.Sizeof(bitmapInfoHeader{})),
-			width:     int32(v.width),
-			height:    -int32(v.height),
-			planes:    1,
-			bitCount:  32,
-			sizeImage: uint32(len(v.pixels)),
+			info := bitmapInfoHeader{
+				size:      uint32(unsafe.Sizeof(bitmapInfoHeader{})),
+				width:     int32(v.width),
+				height:    -int32(v.height),
+				planes:    1,
+				bitCount:  32,
+				sizeImage: uint32(len(v.pixels)),
+			}
+
+			procStretchDIBits.Call(
+				target,
+				uintptr(g.x), uintptr(g.y), uintptr(g.width), uintptr(g.height),
+				0, 0, uintptr(v.width), uintptr(v.height),
+				uintptr(unsafe.Pointer(&v.pixels[0])),
+				uintptr(unsafe.Pointer(&info)),
+				dibRGBColors,
+				srcCopy,
+			)
 		}
+	}
 
-		procStretchDIBits.Call(
-			target,
-			uintptr(g.x), uintptr(g.y), uintptr(g.width), uintptr(g.height),
-			0, 0, uintptr(v.width), uintptr(v.height),
-			uintptr(unsafe.Pointer(&v.pixels[0])),
-			uintptr(unsafe.Pointer(&info)),
-			dibRGBColors,
-			srcCopy,
-		)
+	if v.hasNavigation() {
+		prev, next := navButtonRects(width, height)
+		v.drawNavButton(target, prev, -1)
+		v.drawNavButton(target, next, 1)
 	}
 
 	if target != hdc {
@@ -246,6 +384,235 @@ func (v *viewer) paint() {
 			srcCopy,
 		)
 	}
+}
+
+func drawMessage(hdc uintptr, width, height int, message string) {
+	font, _, _ := procGetStockObject.Call(defaultGuiFont)
+	oldFont, _, _ := procSelectObject.Call(hdc, font)
+	defer procSelectObject.Call(hdc, oldFont)
+
+	procSetBkMode.Call(hdc, bkTransparent)
+	procSetTextColor.Call(hdc, messageColor)
+
+	text, _ := syscall.UTF16PtrFromString(message)
+	rect := winRect{
+		left:   40,
+		top:    40,
+		right:  int32(width - 40),
+		bottom: int32(height - 40),
+	}
+
+	measured := rect
+	procDrawTextW.Call(
+		hdc,
+		uintptr(unsafe.Pointer(text)),
+		^uintptr(0),
+		uintptr(unsafe.Pointer(&measured)),
+		dtCalcRect|dtCenter|dtWordBreak,
+	)
+	textHeight := int(measured.bottom - measured.top)
+	top := (height - textHeight) / 2
+	rect.top = int32(top)
+	rect.bottom = int32(top + textHeight)
+
+	procDrawTextW.Call(
+		hdc,
+		uintptr(unsafe.Pointer(text)),
+		^uintptr(0),
+		uintptr(unsafe.Pointer(&rect)),
+		dtCenter|dtWordBreak,
+	)
+}
+
+// navGlyph is an antialiased button image with per-pixel alpha
+type navGlyph struct {
+	dc     uintptr
+	bitmap uintptr
+	old    uintptr
+	size   int
+}
+
+func (v *viewer) navGlyph(size, direction int) *navGlyph {
+	if direction < 0 {
+		if v.navPrev == nil || v.navPrev.size != size {
+			releaseNavGlyph(&v.navPrev)
+			v.navPrev = newNavGlyph(size, -1)
+		}
+		return v.navPrev
+	}
+	if v.navNext == nil || v.navNext.size != size {
+		releaseNavGlyph(&v.navNext)
+		v.navNext = newNavGlyph(size, 1)
+	}
+	return v.navNext
+}
+
+func (v *viewer) releaseNavGlyphs() {
+	releaseNavGlyph(&v.navPrev)
+	releaseNavGlyph(&v.navNext)
+}
+
+func releaseNavGlyph(g **navGlyph) {
+	if *g == nil {
+		return
+	}
+	if (*g).old != 0 {
+		procSelectObject.Call((*g).dc, (*g).old)
+	}
+	procDeleteObject.Call((*g).bitmap)
+	procDeleteDC.Call((*g).dc)
+	*g = nil
+}
+
+func newNavGlyph(size, direction int) *navGlyph {
+	if size <= 0 {
+		return nil
+	}
+	screen, _, _ := procGetDC.Call(0)
+	if screen == 0 {
+		return nil
+	}
+	defer procReleaseDC.Call(0, screen)
+
+	dc, _, _ := procCreateCompatibleDC.Call(screen)
+	if dc == 0 {
+		return nil
+	}
+
+	header := bitmapInfoHeader{
+		size:      uint32(unsafe.Sizeof(bitmapInfoHeader{})),
+		width:     int32(size),
+		height:    -int32(size),
+		planes:    1,
+		bitCount:  32,
+		sizeImage: uint32(size * size * 4),
+	}
+	var bits uintptr
+	bitmap, _, _ := procCreateDIBSection.Call(
+		dc,
+		uintptr(unsafe.Pointer(&header)),
+		dibRGBColors,
+		uintptr(unsafe.Pointer(&bits)),
+		0,
+		0,
+	)
+	if bitmap == 0 {
+		procDeleteDC.Call(dc)
+		return nil
+	}
+	old, _, _ := procSelectObject.Call(dc, bitmap)
+
+	drawNavGlyph(bits, size, direction)
+	return &navGlyph{dc: dc, bitmap: bitmap, old: old, size: size}
+}
+
+func (v *viewer) drawNavButton(hdc uintptr, rect winRect, direction int) {
+	size := int(rect.right - rect.left)
+	glyph := v.navGlyph(size, direction)
+	if glyph == nil {
+		return
+	}
+	// BLENDFUNCTION is a packed 4-byte struct passed by value
+	blend := uintptr(255)<<16 | uintptr(acSrcAlpha)<<24
+	procAlphaBlend.Call(
+		hdc,
+		uintptr(rect.left), uintptr(rect.top),
+		uintptr(size), uintptr(rect.bottom-rect.top),
+		glyph.dc, 0, 0,
+		uintptr(size), uintptr(glyph.size),
+		blend,
+	)
+}
+
+// drawNavGlyph paints a translucent circle with a chevron into a top-down
+// 32-bit DIB, premultiplying alpha so AlphaBlend can composite it
+func drawNavGlyph(bits uintptr, size, direction int) {
+	pixels := unsafe.Slice((*byte)(unsafe.Pointer(bits)), size*size*4)
+
+	center := float64(size) / 2
+	radius := center - 0.35
+	width := float64(size) * 0.17
+	arm := float64(size) * 0.24
+	stroke := float64(size) * 0.05
+
+	vertexX, armX := center+width, center-width
+	if direction < 0 {
+		vertexX, armX = center-width, center+width
+	}
+	// nudge the chevron toward the side it points to; a bare vertex reads as
+	// off-centre otherwise
+	shift := float64(size) * 0.05 * float64(direction)
+	firstX, firstY := armX+shift, center-arm
+	cornerX, cornerY := vertexX+shift, center
+	lastX, lastY := armX+shift, center+arm
+
+	buttonR, buttonG, buttonB := colorParts(uintptr(navButtonColor))
+	arrowR, arrowG, arrowB := colorParts(uintptr(navArrowColor))
+
+	for y := 0; y < size; y++ {
+		for x := 0; x < size; x++ {
+			cx := float64(x) + 0.5
+			cy := float64(y) + 0.5
+
+			circle := coverage(radius - math.Hypot(cx-center, cy-center))
+			alpha := circle * navButtonAlpha
+			r := buttonR * alpha
+			g := buttonG * alpha
+			b := buttonB * alpha
+
+			chevron := 0.0
+			if circle > 0 {
+				distance := math.Min(
+					segmentDistance(cx, cy, firstX, firstY, cornerX, cornerY),
+					segmentDistance(cx, cy, cornerX, cornerY, lastX, lastY),
+				)
+				chevron = coverage(stroke-distance) * circle
+			}
+			if chevron > 0 {
+				source := chevron * navArrowAlpha
+				r = arrowR*source + r*(1-source)
+				g = arrowG*source + g*(1-source)
+				b = arrowB*source + b*(1-source)
+				alpha = source + alpha*(1-source)
+			}
+
+			offset := (y*size + x) * 4
+			pixels[offset] = byte(math.Round(b * 255))
+			pixels[offset+1] = byte(math.Round(g * 255))
+			pixels[offset+2] = byte(math.Round(r * 255))
+			pixels[offset+3] = byte(math.Round(alpha * 255))
+		}
+	}
+}
+
+// coverage turns a signed distance to a shape edge into a 0..1 pixel share
+func coverage(distance float64) float64 {
+	switch {
+	case distance >= 0.5:
+		return 1
+	case distance <= -0.5:
+		return 0
+	default:
+		return distance + 0.5
+	}
+}
+
+func segmentDistance(px, py, ax, ay, bx, by float64) float64 {
+	dx, dy := bx-ax, by-ay
+	length := dx*dx + dy*dy
+	t := 0.0
+	if length > 0 {
+		t = ((px-ax)*dx + (py-ay)*dy) / length
+		t = math.Min(math.Max(t, 0), 1)
+	}
+	return math.Hypot(px-(ax+t*dx), py-(ay+t*dy))
+}
+
+// colorParts splits a COLORREF (0x00BBGGRR) into normalized components
+func colorParts(colorref uintptr) (r, g, b float64) {
+	return float64(colorref&0xFF) / 255,
+		float64((colorref>>8)&0xFF) / 255,
+		float64((colorref>>16)&0xFF) / 255
 }
 
 func fitSize(imageWidth, imageHeight, width, height int) (int, int) {
