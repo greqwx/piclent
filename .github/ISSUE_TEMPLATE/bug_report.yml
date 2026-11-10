@@ -20,8 +20,8 @@ body:
   - type: input
     id: version
     attributes:
-      label: piclent version
-      description: From the file properties of piclent.exe, or the installer name (piclent-1.2.0-setup.exe)
+      label: Piclent version
+      description: From the installer name (piclent-1.2-setup.exe)
       placeholder: "1.2"
     validations:
       required: true
