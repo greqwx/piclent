@@ -44,9 +44,76 @@ jobs:
           name: piclent-${{ matrix.goarch }}
           path: piclent-${{ matrix.goarch }}.exe
 
+  installer:
+    needs: build
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/download-artifact@v7
+        with:
+          path: installer/payload
+          merge-multiple: true
+
+      - name: Read version
+        id: version
+        shell: pwsh
+        run: |
+          $ref = $env:GITHUB_REF_NAME
+          if ($ref -match '^v(.+)$') {
+            $version = $Matches[1]
+          } else {
+            $version = '0.0.0-dev'
+          }
+
+          $core = ($version -split '[-+]')[0]
+          $parts = @($core -split '\.')
+          $numeric = for ($i = 0; $i -lt 4; $i++) {
+            if ($i -lt $parts.Count -and $parts[$i] -match '^\d+$') {
+              [int]$parts[$i]
+            } else {
+              0
+            }
+          }
+
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "numeric=$($numeric -join '.')" >> $env:GITHUB_OUTPUT
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) {
+            choco install innosetup --yes --no-progress
+          }
+
+      - name: Build installer
+        shell: pwsh
+        working-directory: installer
+        env:
+          APP_VERSION: ${{ steps.version.outputs.version }}
+          APP_VERSION_NUMERIC: ${{ steps.version.outputs.numeric }}
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) {
+            $iscc = "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe"
+          }
+          & $iscc "/DAppVersion=$env:APP_VERSION" "/DAppVersionNumeric=$env:APP_VERSION_NUMERIC" piclent.iss
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
+
+      - name: Upload installer
+        uses: actions/upload-artifact@v6
+        with:
+          name: piclent-installer
+          path: installer/Output/*-setup.exe
+          if-no-files-found: error
+
   release:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: build
+    needs: [build, installer]
     runs-on: ubuntu-latest
     permissions:
       contents: write
