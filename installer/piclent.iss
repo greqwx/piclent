@@ -10,15 +10,19 @@
   #define AppVersionNumeric "0.0.0.0"
 #endif
 
+; Name shown by the shell (Open with, Default apps, Apps & features). Registry keys,
+; the exe and the install folder stay lowercase: they are identifiers, not labels.
+#define AppDisplayName "Piclent"
+
 [Setup]
 AppId={{6C1D5F1B-3B0F-4C8E-9E4A-2F0C0E1A7B31}
-AppName=piclent
+AppName={#AppDisplayName}
 AppVersion={#AppVersion}
-AppVerName=piclent {#AppVersion}
+AppVerName={#AppDisplayName} {#AppVersion}
 AppPublisher=Greg
 AppCopyright=Copyright (c) 2026 Greg and Contributors
 DefaultDirName={autopf}\piclent
-DefaultGroupName=piclent
+DefaultGroupName={#AppDisplayName}
 DisableProgramGroupPage=yes
 PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog commandline
@@ -35,8 +39,8 @@ CloseApplications=yes
 VersionInfoVersion={#AppVersionNumeric}
 VersionInfoProductVersion={#AppVersionNumeric}
 VersionInfoCompany=Greg
-VersionInfoDescription=piclent image viewer
-VersionInfoProductName=piclent
+VersionInfoDescription={#AppDisplayName} image viewer
+VersionInfoProductName={#AppDisplayName}
 VersionInfoCopyright=Copyright (c) 2026 Greg and Contributors
 
 [Languages]
@@ -45,14 +49,14 @@ Name: "russian"; MessagesFile: "compiler:Languages\Russian.isl"
 
 [CustomMessages]
 TaskGroup=Optional
-TaskPath=Add piclent to PATH (open images from a terminal)
-TaskAssoc=Add piclent to the "Open with" menu for .png, .jpg, .jpeg, .gif
-TaskDefault=Open Windows settings to choose piclent as the default viewer
+TaskPath=Add {#AppDisplayName} to PATH (open images from a terminal)
+TaskAssoc=Add {#AppDisplayName} to the "Open with" menu for .png, .jpg, .jpeg, .gif
+TaskDefault=Open Windows settings to choose {#AppDisplayName} as the default viewer
 PathWriteFailed=Could not write to the PATH variable. You can add this folder manually:
 russian.TaskGroup=Дополнительно
-russian.TaskPath=Добавить piclent в PATH (открывать картинки из терминала)
-russian.TaskAssoc=Пункт piclent в «Открыть с помощью» для .png, .jpg, .jpeg, .gif
-russian.TaskDefault=Открыть настройки, чтобы выбрать piclent по умолчанию
+russian.TaskPath=Добавить {#AppDisplayName} в PATH (открывать картинки из терминала)
+russian.TaskAssoc=Пункт {#AppDisplayName} в «Открыть с помощью» для .png, .jpg, .jpeg, .gif
+russian.TaskDefault=Открыть настройки, чтобы выбрать {#AppDisplayName} по умолчанию
 russian.PathWriteFailed=Не удалось записать PATH. Добавьте папку вручную:
 
 [Tasks]
@@ -67,8 +71,8 @@ Source: "payload\piclent-arm64.exe"; DestDir: "{app}"; DestName: "piclent.exe"; 
 Source: "..\license.txt"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
-Name: "{group}\piclent"; Filename: "{app}\piclent.exe"
-Name: "{autodesktop}\piclent"; Filename: "{app}\piclent.exe"; Tasks: desktopicon
+Name: "{group}\{#AppDisplayName}"; Filename: "{app}\piclent.exe"
+Name: "{autodesktop}\{#AppDisplayName}"; Filename: "{app}\piclent.exe"; Tasks: desktopicon
 
 [Registry]
 ; ProgID for the viewer, lives in HKCR (per-machine when installing for all users)
@@ -76,14 +80,26 @@ Root: HKA; Subkey: "Software\Classes\piclent.image"; ValueType: string; ValueNam
 Root: HKA; Subkey: "Software\Classes\piclent.image\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\piclent.exe,0"
 Root: HKA; Subkey: "Software\Classes\piclent.image\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\piclent.exe"" ""%1"""; Flags: uninsdeletekey
 
+; Without this the shell has no name for the handler and falls back to "piclent.exe"
+; (the exe carries no version info), so the "Open with" list shows the file name.
+Root: HKA; Subkey: "Software\Classes\Applications\piclent.exe"; ValueType: string; ValueName: "FriendlyAppName"; ValueData: "{#AppDisplayName}"; Tasks: assoc; Flags: uninsdeletekey
+Root: HKA; Subkey: "Software\Classes\Applications\piclent.exe"; ValueType: string; ValueName: "ApplicationCompany"; ValueData: "Greg"; Tasks: assoc
+Root: HKA; Subkey: "Software\Classes\Applications\piclent.exe\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\piclent.exe,0"; Tasks: assoc
+Root: HKA; Subkey: "Software\Classes\Applications\piclent.exe\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\piclent.exe"" ""%1"""; Tasks: assoc; Flags: uninsdeletekey
+Root: HKA; Subkey: "Software\Classes\Applications\piclent.exe\SupportedTypes"; ValueType: string; ValueName: ".png"; ValueData: ""; Tasks: assoc
+Root: HKA; Subkey: "Software\Classes\Applications\piclent.exe\SupportedTypes"; ValueType: string; ValueName: ".jpg"; ValueData: ""; Tasks: assoc
+Root: HKA; Subkey: "Software\Classes\Applications\piclent.exe\SupportedTypes"; ValueType: string; ValueName: ".jpeg"; ValueData: ""; Tasks: assoc
+Root: HKA; Subkey: "Software\Classes\Applications\piclent.exe\SupportedTypes"; ValueType: string; ValueName: ".gif"; ValueData: ""; Tasks: assoc
+
 ; "Open with" entries. Existing file associations stay untouched.
-Root: HKA; Subkey: "Software\Classes\.png\OpenWithProgids"; ValueType: none; ValueName: "piclent.image"; Tasks: assoc; Flags: uninsdeletevalue
-Root: HKA; Subkey: "Software\Classes\.jpg\OpenWithProgids"; ValueType: none; ValueName: "piclent.image"; Tasks: assoc; Flags: uninsdeletevalue
-Root: HKA; Subkey: "Software\Classes\.jpeg\OpenWithProgids"; ValueType: none; ValueName: "piclent.image"; Tasks: assoc; Flags: uninsdeletevalue
-Root: HKA; Subkey: "Software\Classes\.gif\OpenWithProgids"; ValueType: none; ValueName: "piclent.image"; Tasks: assoc; Flags: uninsdeletevalue
+; ValueType must be a real type: "none" only creates the key and never the value.
+Root: HKA; Subkey: "Software\Classes\.png\OpenWithProgids"; ValueType: string; ValueName: "piclent.image"; ValueData: ""; Tasks: assoc; Flags: uninsdeletevalue
+Root: HKA; Subkey: "Software\Classes\.jpg\OpenWithProgids"; ValueType: string; ValueName: "piclent.image"; ValueData: ""; Tasks: assoc; Flags: uninsdeletevalue
+Root: HKA; Subkey: "Software\Classes\.jpeg\OpenWithProgids"; ValueType: string; ValueName: "piclent.image"; ValueData: ""; Tasks: assoc; Flags: uninsdeletevalue
+Root: HKA; Subkey: "Software\Classes\.gif\OpenWithProgids"; ValueType: string; ValueName: "piclent.image"; ValueData: ""; Tasks: assoc; Flags: uninsdeletevalue
 
 ; Makes piclent show up on the "Default apps" page in Settings.
-Root: HKA; Subkey: "Software\piclent\Capabilities"; ValueType: string; ValueName: "ApplicationName"; ValueData: "piclent"; Flags: uninsdeletekey
+Root: HKA; Subkey: "Software\piclent\Capabilities"; ValueType: string; ValueName: "ApplicationName"; ValueData: "{#AppDisplayName}"; Flags: uninsdeletekey
 Root: HKA; Subkey: "Software\piclent\Capabilities"; ValueType: string; ValueName: "ApplicationDescription"; ValueData: "Tiny image viewer"
 Root: HKA; Subkey: "Software\piclent\Capabilities"; ValueType: string; ValueName: "ApplicationIcon"; ValueData: "{app}\piclent.exe,0"
 Root: HKA; Subkey: "Software\piclent\Capabilities\FileAssociations"; ValueType: string; ValueName: ".png"; ValueData: "piclent.image"
@@ -97,7 +113,7 @@ Root: HKA; Subkey: "Software\Microsoft\Windows\CurrentVersion\App Paths\piclent.
 
 [Run]
 Filename: "ms-settings:defaultapps?registeredAppUser=piclent"; Tasks: defaultapp; Flags: shellexec nowait skipifsilent
-Filename: "{app}\piclent.exe"; Description: "{cm:LaunchProgram,piclent}"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\piclent.exe"; Description: "{cm:LaunchProgram,{#AppDisplayName}}"; Flags: nowait postinstall skipifsilent
 
 [Code]
 const
