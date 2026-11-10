@@ -19,6 +19,8 @@ import (
 	"strings"
 	"syscall"
 	"unsafe"
+
+	_ "golang.org/x/image/bmp"
 )
 
 //go:embed assets/icon-16.png

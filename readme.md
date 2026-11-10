@@ -9,10 +9,8 @@ Get `piclent-VERSION-setup.exe` in Releases.
 Go 1.21 or newer:
 
 ```
-go build -ldflags="-H windowsgui" -o piclent.exe .
+go build -trimpath -ldflags="-H windowsgui -s -w" -o piclent.exe .
 ```
-
-The exe icon comes from `assets/icon.ico` through a `.syso` file that the CI build generates with `rsrc`.
 
 ## License
 Copyright (c) 2026 Greg and Contributors<br>
