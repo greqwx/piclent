@@ -1,0 +1,33 @@
+name: Feature request
+description: Suggest an idea or an improvement
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem are you solving?
+      description: Describe the situation where piclent is not enough, not the solution yet
+      placeholder: I open screenshots from a folder and have to ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: How could it work?
+      description: What should the app do
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives
+      description: Other apps or workarounds you use for this now
+
+  - type: dropdown
+    id: importance
+    attributes:
+      label: How much do you need it?
+      options:
+        - Nice to have
+        - Would use often
+        - Blocking my work
