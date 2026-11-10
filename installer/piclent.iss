@@ -90,6 +90,7 @@ Root: HKA; Subkey: "Software\Classes\Applications\piclent.exe\SupportedTypes"; V
 Root: HKA; Subkey: "Software\Classes\Applications\piclent.exe\SupportedTypes"; ValueType: string; ValueName: ".jpg"; ValueData: ""; Tasks: assoc
 Root: HKA; Subkey: "Software\Classes\Applications\piclent.exe\SupportedTypes"; ValueType: string; ValueName: ".jpeg"; ValueData: ""; Tasks: assoc
 Root: HKA; Subkey: "Software\Classes\Applications\piclent.exe\SupportedTypes"; ValueType: string; ValueName: ".gif"; ValueData: ""; Tasks: assoc
+Root: HKA; Subkey: "Software\Classes\Applications\piclent.exe\SupportedTypes"; ValueType: string; ValueName: ".bmp"; ValueData: ""; Tasks: assoc
 
 ; "Open with" entries. Existing file associations stay untouched.
 ; ValueType must be a real type: "none" only creates the key and never the value.
@@ -97,6 +98,7 @@ Root: HKA; Subkey: "Software\Classes\.png\OpenWithProgids"; ValueType: string; V
 Root: HKA; Subkey: "Software\Classes\.jpg\OpenWithProgids"; ValueType: string; ValueName: "piclent.image"; ValueData: ""; Tasks: assoc; Flags: uninsdeletevalue
 Root: HKA; Subkey: "Software\Classes\.jpeg\OpenWithProgids"; ValueType: string; ValueName: "piclent.image"; ValueData: ""; Tasks: assoc; Flags: uninsdeletevalue
 Root: HKA; Subkey: "Software\Classes\.gif\OpenWithProgids"; ValueType: string; ValueName: "piclent.image"; ValueData: ""; Tasks: assoc; Flags: uninsdeletevalue
+Root: HKA; Subkey: "Software\Classes\.bmp\OpenWithProgids"; ValueType: string; ValueName: "piclent.image"; ValueData: ""; Tasks: assoc; Flags: uninsdeletevalue
 
 ; Makes piclent show up on the "Default apps" page in Settings.
 Root: HKA; Subkey: "Software\piclent\Capabilities"; ValueType: string; ValueName: "ApplicationName"; ValueData: "{#AppDisplayName}"; Flags: uninsdeletekey
@@ -106,6 +108,7 @@ Root: HKA; Subkey: "Software\piclent\Capabilities\FileAssociations"; ValueType: 
 Root: HKA; Subkey: "Software\piclent\Capabilities\FileAssociations"; ValueType: string; ValueName: ".jpg"; ValueData: "piclent.image"
 Root: HKA; Subkey: "Software\piclent\Capabilities\FileAssociations"; ValueType: string; ValueName: ".jpeg"; ValueData: "piclent.image"
 Root: HKA; Subkey: "Software\piclent\Capabilities\FileAssociations"; ValueType: string; ValueName: ".gif"; ValueData: "piclent.image"
+Root: HKA; Subkey: "Software\piclent\Capabilities\FileAssociations"; ValueType: string; ValueName: ".bmp"; ValueData: "piclent.image"
 Root: HKA; Subkey: "Software\RegisteredApplications"; ValueType: string; ValueName: "piclent"; ValueData: "Software\piclent\Capabilities"; Flags: uninsdeletevalue
 
 ; Lets Win+R and explorer resolve "piclent" without a full path.
