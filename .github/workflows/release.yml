@@ -132,7 +132,7 @@ jobs:
           else
             RANGE="${PREV}..HEAD"
           fi
-          LINES=$(git log "$RANGE" --pretty=format:"- %s" --no-merges)
+          LINES=$(git log "$RANGE" --pretty=format:"- %s ([%h](https://github.com/${GITHUB_REPOSITORY}/commit/%H))" --no-merges)
           echo "NOTES<<EOF" >> "$GITHUB_OUTPUT"
           echo "$LINES"    >> "$GITHUB_OUTPUT"
           echo "EOF"       >> "$GITHUB_OUTPUT"
