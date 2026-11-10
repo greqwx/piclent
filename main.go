@@ -107,7 +107,7 @@ func run() int {
 	procDwmSetWindowAttribute.Call(hwnd, dwmwaUseImmersiveDarkMode, uintptr(unsafe.Pointer(&darkMode)), unsafe.Sizeof(darkMode))
 
 	// store viewer pointer in window's user data
-	v := &viewer{hwnd: hwnd}
+	v := &viewer{hwnd: hwnd, zoom: minZoom}
 	procSetWindowLongPtrW.Call(hwnd, gwlUserdata, uintptr(unsafe.Pointer(v)))
 
 	procShowWindow.Call(hwnd, swShow)
@@ -155,7 +155,7 @@ func wndProc(hwnd, msg, wParam, lParam uintptr) uintptr {
 			v.pixels = f.pixels
 			v.width = f.width
 			v.height = f.height
-			procInvalidateRect.Call(hwnd, 0, 1)
+			procInvalidateRect.Call(hwnd, 0, 0)
 		}
 		return 0
 
@@ -174,19 +174,70 @@ func wndProc(hwnd, msg, wParam, lParam uintptr) uintptr {
 	case wmSize:
 		v := getViewer(hwnd)
 		if v != nil {
-			procInvalidateRect.Call(hwnd, 0, 1)
+			procInvalidateRect.Call(hwnd, 0, 0)
 		}
 		return 0
 
 	case wmEraseBkgnd:
 		return 1 // prevent flicker — WM_PAINT handles background
 
+	case wmMouseWheel:
+		v := getViewer(hwnd)
+		if v != nil {
+			x, y := mousePoint(lParam)
+			v.zoomWheel(x, y, int(int16(uint16(wParam>>16))))
+		}
+		return 0
+
+	case wmLButtonDown, wmRButtonDown:
+		v := getViewer(hwnd)
+		if v != nil && !v.dragging {
+			v.dragging = true
+			v.dragX, v.dragY = mousePoint(lParam)
+			procSetCapture.Call(hwnd)
+			procSetCursor.Call(loadCursor(idcSizeAll))
+		}
+		return 0
+
+	case wmMouseMove:
+		v := getViewer(hwnd)
+		if v != nil && v.dragging {
+			x, y := mousePoint(lParam)
+			v.pan(x-v.dragX, y-v.dragY)
+			v.dragX, v.dragY = x, y
+			procSetCursor.Call(loadCursor(idcSizeAll))
+		}
+		return 0
+
+	case wmLButtonUp, wmRButtonUp:
+		v := getViewer(hwnd)
+		if v != nil && v.dragging {
+			v.dragging = false
+			procReleaseCapture.Call()
+			procSetCursor.Call(loadCursor(idcArrow))
+		}
+		return 0
+
+	case wmCaptureChanged:
+		v := getViewer(hwnd)
+		if v != nil {
+			v.dragging = false
+		}
+		return 0
+
 	case wmDestroy:
+		if v := getViewer(hwnd); v != nil {
+			v.releaseBackBuffer()
+		}
 		procPostQuitMessage.Call(0)
 		return 0
 	}
 	r, _, _ := procDefWindowProcW.Call(hwnd, msg, wParam, lParam)
 	return r
+}
+
+func mousePoint(lParam uintptr) (int, int) {
+	return int(int16(uint16(lParam))), int(int16(uint16(lParam >> 16)))
 }
 
 func getViewer(hwnd uintptr) *viewer {
@@ -262,13 +313,13 @@ func downscale(src *image.RGBA, width, height int) *image.RGBA {
 
 	for y := 0; y < height; y++ {
 		y0 := y * srcHeight / height
-		y1 := (y+1)*srcHeight/height
+		y1 := (y + 1) * srcHeight / height
 		if y1 <= y0 {
 			y1 = y0 + 1
 		}
 		for x := 0; x < width; x++ {
 			x0 := x * srcWidth / width
-			x1 := (x+1)*srcWidth/width
+			x1 := (x + 1) * srcWidth / width
 			if x1 <= x0 {
 				x1 = x0 + 1
 			}

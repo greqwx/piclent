@@ -13,12 +13,19 @@ const (
 	csVRedraw = 0x0001
 
 	// window messages
-	wmDestroy   = 0x0002
-	wmSize      = 0x0005
-	wmPaint     = 0x000F
-	wmEraseBkgnd = 0x0014
-	wmClose     = 0x0010
-	wmUserFrame = 0x0400 + 1 // WM_USER+1
+	wmDestroy        = 0x0002
+	wmSize           = 0x0005
+	wmPaint          = 0x000F
+	wmEraseBkgnd     = 0x0014
+	wmClose          = 0x0010
+	wmMouseMove      = 0x0200
+	wmLButtonDown    = 0x0201
+	wmLButtonUp      = 0x0202
+	wmRButtonDown    = 0x0204
+	wmRButtonUp      = 0x0205
+	wmMouseWheel     = 0x020A
+	wmCaptureChanged = 0x0215
+	wmUserFrame      = 0x0400 + 1 // WM_USER+1
 
 	// ShowWindow
 	swShow = 5
@@ -35,7 +42,8 @@ const (
 	srcCopy      = 0x00CC0020
 
 	// cursor resource
-	idcArrow = 32512
+	idcArrow   = 32512
+	idcSizeAll = 32646
 
 	// MonitorFromPoint
 	monitorDefaultToPrimary = 1
@@ -49,44 +57,53 @@ var (
 	kernel32 = syscall.NewLazyDLL("kernel32.dll")
 	gdi32    = syscall.NewLazyDLL("gdi32.dll")
 
-	procGetModuleHandleW   = kernel32.NewProc("GetModuleHandleW")
-	procGetConsoleWindow   = kernel32.NewProc("GetConsoleWindow")
-	procMessageBoxW        = user32.NewProc("MessageBoxW")
-	procRegisterClassExW   = user32.NewProc("RegisterClassExW")
-	procCreateWindowExW    = user32.NewProc("CreateWindowExW")
-	procShowWindow         = user32.NewProc("ShowWindow")
-	procUpdateWindow       = user32.NewProc("UpdateWindow")
-	procDefWindowProcW     = user32.NewProc("DefWindowProcW")
-	procPostQuitMessage    = user32.NewProc("PostQuitMessage")
-	procGetMessageW        = user32.NewProc("GetMessageW")
-	procTranslateMessage   = user32.NewProc("TranslateMessage")
-	procDispatchMessageW   = user32.NewProc("DispatchMessageW")
-	procPostMessageW       = user32.NewProc("PostMessageW")
-	procGetClientRect      = user32.NewProc("GetClientRect")
-	procInvalidateRect     = user32.NewProc("InvalidateRect")
-	procBeginPaint         = user32.NewProc("BeginPaint")
-	procEndPaint           = user32.NewProc("EndPaint")
-	procSetWindowLongPtrW  = user32.NewProc("SetWindowLongPtrW")
-	procGetWindowLongPtrW  = user32.NewProc("GetWindowLongPtrW")
-	procAdjustWindowRect   = user32.NewProc("AdjustWindowRect")
-	procLoadCursorW        = user32.NewProc("LoadCursorW")
-	procMonitorFromPoint   = user32.NewProc("MonitorFromPoint")
-	procGetMonitorInfoW    = user32.NewProc("GetMonitorInfoW")
+	procGetModuleHandleW  = kernel32.NewProc("GetModuleHandleW")
+	procGetConsoleWindow  = kernel32.NewProc("GetConsoleWindow")
+	procMessageBoxW       = user32.NewProc("MessageBoxW")
+	procRegisterClassExW  = user32.NewProc("RegisterClassExW")
+	procCreateWindowExW   = user32.NewProc("CreateWindowExW")
+	procShowWindow        = user32.NewProc("ShowWindow")
+	procUpdateWindow      = user32.NewProc("UpdateWindow")
+	procDefWindowProcW    = user32.NewProc("DefWindowProcW")
+	procPostQuitMessage   = user32.NewProc("PostQuitMessage")
+	procGetMessageW       = user32.NewProc("GetMessageW")
+	procTranslateMessage  = user32.NewProc("TranslateMessage")
+	procDispatchMessageW  = user32.NewProc("DispatchMessageW")
+	procPostMessageW      = user32.NewProc("PostMessageW")
+	procGetClientRect     = user32.NewProc("GetClientRect")
+	procInvalidateRect    = user32.NewProc("InvalidateRect")
+	procBeginPaint        = user32.NewProc("BeginPaint")
+	procEndPaint          = user32.NewProc("EndPaint")
+	procSetWindowLongPtrW = user32.NewProc("SetWindowLongPtrW")
+	procGetWindowLongPtrW = user32.NewProc("GetWindowLongPtrW")
+	procSetCapture        = user32.NewProc("SetCapture")
+	procReleaseCapture    = user32.NewProc("ReleaseCapture")
+	procSetCursor         = user32.NewProc("SetCursor")
+	procScreenToClient    = user32.NewProc("ScreenToClient")
+	procAdjustWindowRect  = user32.NewProc("AdjustWindowRect")
+	procLoadCursorW       = user32.NewProc("LoadCursorW")
+	procMonitorFromPoint  = user32.NewProc("MonitorFromPoint")
+	procGetMonitorInfoW   = user32.NewProc("GetMonitorInfoW")
 
-	procPatBlt             = gdi32.NewProc("PatBlt")
-	procSetStretchBltMode  = gdi32.NewProc("SetStretchBltMode")
-	procSetBrushOrgEx      = gdi32.NewProc("SetBrushOrgEx")
-	procStretchDIBits      = gdi32.NewProc("StretchDIBits")
-	procGetDC              = user32.NewProc("GetDC")
-	procReleaseDC          = user32.NewProc("ReleaseDC")
-	procCreateSolidBrush   = gdi32.NewProc("CreateSolidBrush")
-	procFillRect           = user32.NewProc("FillRect")
-	procCreateBitmap       = gdi32.NewProc("CreateBitmap")
-	procDeleteObject       = gdi32.NewProc("DeleteObject")
-	procCreateIconIndirect = user32.NewProc("CreateIconIndirect")
+	procPatBlt                 = gdi32.NewProc("PatBlt")
+	procBitBlt                 = gdi32.NewProc("BitBlt")
+	procCreateCompatibleDC     = gdi32.NewProc("CreateCompatibleDC")
+	procCreateCompatibleBitmap = gdi32.NewProc("CreateCompatibleBitmap")
+	procSelectObject           = gdi32.NewProc("SelectObject")
+	procDeleteDC               = gdi32.NewProc("DeleteDC")
+	procSetStretchBltMode      = gdi32.NewProc("SetStretchBltMode")
+	procSetBrushOrgEx          = gdi32.NewProc("SetBrushOrgEx")
+	procStretchDIBits          = gdi32.NewProc("StretchDIBits")
+	procGetDC                  = user32.NewProc("GetDC")
+	procReleaseDC              = user32.NewProc("ReleaseDC")
+	procCreateSolidBrush       = gdi32.NewProc("CreateSolidBrush")
+	procFillRect               = user32.NewProc("FillRect")
+	procCreateBitmap           = gdi32.NewProc("CreateBitmap")
+	procDeleteObject           = gdi32.NewProc("DeleteObject")
+	procCreateIconIndirect     = user32.NewProc("CreateIconIndirect")
 
-	dwmapi                       = syscall.NewLazyDLL("dwmapi.dll")
-	procDwmSetWindowAttribute    = dwmapi.NewProc("DwmSetWindowAttribute")
+	dwmapi                    = syscall.NewLazyDLL("dwmapi.dll")
+	procDwmSetWindowAttribute = dwmapi.NewProc("DwmSetWindowAttribute")
 )
 
 type winRect struct {
@@ -150,6 +167,11 @@ type monitorInfo struct {
 	rcMonitor winRect
 	rcWork    winRect
 	dwFlags   uint32
+}
+
+type point struct {
+	x int32
+	y int32
 }
 
 type iconInfo struct {
