@@ -123,19 +123,33 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Build changelog
-        id: changelog
+      - name: Compose release notes
         run: |
-          PREV=$(git tag --sort=-version:refname | sed -n '2p')
+          TAG="$GITHUB_REF_NAME"
+
+          # lightweight tags point straight at a commit and have no message of
+          # their own, %(contents) would hand back the commit message instead
+          header=""
+          if [ "$(git cat-file -t "$TAG" 2>/dev/null)" = "tag" ]; then
+            header=$(git tag -l --format='%(contents)' "$TAG" \
+              | sed '/^-----BEGIN PGP SIGNATURE-----$/,$d; /^-----BEGIN SSH SIGNATURE-----$/,$d')
+          fi
+
+          PREV=$(git tag --sort=-version:refname | grep -vxF "$TAG" | sed -n '1p')
           if [ -z "$PREV" ]; then
             RANGE="HEAD"
           else
             RANGE="${PREV}..HEAD"
           fi
-          LINES=$(git log "$RANGE" --pretty=format:"- %s ([%h](https://github.com/${GITHUB_REPOSITORY}/commit/%H))" --no-merges)
-          echo "NOTES<<EOF" >> "$GITHUB_OUTPUT"
-          echo "$LINES"    >> "$GITHUB_OUTPUT"
-          echo "EOF"       >> "$GITHUB_OUTPUT"
+
+          commits=$(git log "$RANGE" --pretty=format:"- %s ([%h](https://github.com/${GITHUB_REPOSITORY}/commit/%H))" --no-merges)
+
+          {
+            if [ -n "$header" ]; then
+              printf '%s\n\n' "$header"
+            fi
+            printf '%s\n' "$commits"
+          } > "$RUNNER_TEMP/notes.md"
 
       - uses: actions/download-artifact@v7
         with:
@@ -144,5 +158,5 @@ jobs:
 
       - uses: softprops/action-gh-release@v3
         with:
-          body: ${{ steps.changelog.outputs.NOTES }}
+          body_path: ${{ runner.temp }}/notes.md
           files: dist/*.exe
