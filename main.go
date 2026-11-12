@@ -12,6 +12,7 @@ import (
 	_ "image/gif"
 	_ "image/jpeg"
 	_ "image/png"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -21,6 +22,7 @@ import (
 	"unsafe"
 
 	_ "golang.org/x/image/bmp"
+	_ "golang.org/x/image/webp"
 )
 
 //go:embed assets/icon-16.png
@@ -356,6 +358,15 @@ func loadFrame(path string, maxWidth, maxHeight int) (*frame, error) {
 	}
 	defer file.Close()
 
+	if strings.EqualFold(filepath.Ext(path), ".webp") {
+		if animatedWebP(file) {
+			return nil, fmt.Errorf("%s: animated WebP is not supported", path)
+		}
+		if _, err := file.Seek(0, io.SeekStart); err != nil {
+			return nil, err
+		}
+	}
+
 	img, _, err := image.Decode(file)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", path, err)
@@ -380,6 +391,19 @@ func loadFrame(path string, maxWidth, maxHeight int) (*frame, error) {
 		width:  width,
 		height: height,
 	}, nil
+}
+
+// animatedWebP reports whether the file header marks it as an animation
+func animatedWebP(r io.Reader) bool {
+	var header [21]byte
+	if _, err := io.ReadFull(r, header[:]); err != nil {
+		return false
+	}
+	const animationBit = 0x02
+	return string(header[0:4]) == "RIFF" &&
+		string(header[8:12]) == "WEBP" &&
+		string(header[12:16]) == "VP8X" &&
+		header[20]&animationBit != 0
 }
 
 func toBGRA(img *image.RGBA) []byte {

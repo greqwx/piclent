@@ -74,7 +74,7 @@ func listImages(dir string) ([]string, error) {
 			continue
 		}
 		switch strings.ToLower(filepath.Ext(entry.Name())) {
-		case ".png", ".jpg", ".jpeg", ".gif", ".bmp":
+		case ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp":
 			paths = append(paths, filepath.Join(dir, entry.Name()))
 		}
 	}
