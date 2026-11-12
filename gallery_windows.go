@@ -86,23 +86,29 @@ func listImages(dir string) ([]string, error) {
 
 // start decodes images in the background, nearest to the current one first
 func (g *gallery) start(maxWidth, maxHeight int) {
+	animCap := g.budget / 2
 	go func() {
 		for {
 			g.mu.Lock()
-			path, ok := g.nextTaskLocked()
+			path, full, ok := g.nextTaskLocked()
 			g.mu.Unlock()
 			if !ok {
 				<-g.wake
 				continue
 			}
 
-			f, err := loadFrame(path, maxWidth, maxHeight)
+			f, err := loadFrame(path, maxWidth, maxHeight, animCap, full)
 
 			g.mu.Lock()
 			g.busy = ""
 			current := g.paths[g.index] == path
 			if err != nil {
-				g.errors[path] = err.Error()
+				if old := g.cache[path]; old != nil && old.partial {
+					// the first frame is still good, only the animation failed
+					old.partial = false
+				} else {
+					g.errors[path] = err.Error()
+				}
 			} else {
 				g.storeLocked(path, f)
 			}
@@ -123,9 +129,11 @@ func (g *gallery) notify() {
 	}
 }
 
-func (g *gallery) nextTaskLocked() (string, bool) {
+// nextTaskLocked picks the next file to decode; full tells whether it is the
+// current one, whose whole animation is worth decoding
+func (g *gallery) nextTaskLocked() (path string, full bool, ok bool) {
 	if g.busy != "" {
-		return "", false
+		return "", false, false
 	}
 	indexes := []int{g.index}
 	for radius := 1; radius <= prefetchRadius; radius++ {
@@ -135,17 +143,19 @@ func (g *gallery) nextTaskLocked() (string, bool) {
 		if i < 0 || i >= len(g.paths) {
 			continue
 		}
-		path := g.paths[i]
-		if _, ok := g.cache[path]; ok {
-			continue
-		}
-		if _, ok := g.errors[path]; ok {
+		path = g.paths[i]
+		current := i == g.index
+		if cached := g.cache[path]; cached != nil {
+			if !current || !cached.partial {
+				continue
+			}
+		} else if _, failed := g.errors[path]; failed {
 			continue
 		}
 		g.busy = path
-		return path, true
+		return path, current, true
 	}
-	return "", false
+	return "", false, false
 }
 
 // step moves through the folder and reports whether the index changed
@@ -190,12 +200,12 @@ func (g *gallery) currentName() string {
 
 func (g *gallery) storeLocked(path string, f *frame) {
 	if old := g.cache[path]; old != nil {
-		g.bytes -= len(old.pixels)
+		g.bytes -= old.size()
 		g.removeLocked(path)
 	}
 	g.cache[path] = f
 	g.order = append(g.order, path)
-	g.bytes += len(f.pixels)
+	g.bytes += f.size()
 
 	current := g.paths[g.index]
 	for g.bytes > g.budget {
@@ -209,7 +219,7 @@ func (g *gallery) storeLocked(path string, f *frame) {
 		if victim == "" {
 			break
 		}
-		g.bytes -= len(g.cache[victim].pixels)
+		g.bytes -= g.cache[victim].size()
 		g.removeLocked(victim)
 	}
 }

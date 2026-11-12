@@ -5,6 +5,7 @@ package main
 import (
 	"math"
 	"syscall"
+	"time"
 	"unsafe"
 )
 
@@ -31,6 +32,13 @@ type viewer struct {
 	width   int
 	height  int
 	message string
+
+	anim      *animation
+	animFrame int
+	animGen   int
+	animStop  chan struct{}
+	paused    bool
+	suspended bool
 
 	zoom    float64
 	offsetX float64
@@ -179,6 +187,7 @@ func (v *viewer) navigate(direction int) {
 	v.offsetX = 0
 	v.offsetY = 0
 	v.message = ""
+	v.paused = false
 	v.updateTitle()
 	v.refresh()
 }
@@ -203,13 +212,135 @@ func (v *viewer) refresh() {
 		v.pixels = nil
 		v.width = 0
 		v.height = 0
+		v.anim = nil
+		v.animFrame = 0
+		v.updatePlayback()
 	case f != nil:
-		v.pixels = f.pixels
+		v.message = ""
 		v.width = f.width
 		v.height = f.height
-		v.message = ""
+		v.anim = f.anim
+		v.animFrame = 0
+		if f.anim != nil {
+			v.pixels = f.anim.frames[0]
+		} else {
+			v.pixels = f.pixels
+		}
+		v.updatePlayback()
+	default:
+		// the next image is still decoding, keep the previous one frozen
+		v.stopPlayback()
 	}
 	procInvalidateRect.Call(v.hwnd, 0, 0)
+}
+
+// updatePlayback starts the frame ticker only when there is something to play
+func (v *viewer) updatePlayback() {
+	v.stopPlayback()
+	if v.anim == nil || len(v.anim.frames) < 2 || v.paused || v.suspended {
+		return
+	}
+
+	gen := v.animGen
+	stop := make(chan struct{})
+	v.animStop = stop
+
+	anim := v.anim
+	hwnd := v.hwnd
+	index := v.animFrame
+
+	beginTimerResolution()
+	go func() {
+		defer endTimerResolution()
+
+		plays := 1
+		nextAt := time.Now().Add(frameDuration(anim.delays[index]))
+		for {
+			if wait := time.Until(nextAt); wait > 0 {
+				timer := time.NewTimer(wait)
+				select {
+				case <-stop:
+					timer.Stop()
+					return
+				case <-timer.C:
+				}
+				continue
+			}
+
+			// the machine fell behind, jump to the frame that should be shown now
+			advanced := false
+			for {
+				next := index + 1
+				if next >= len(anim.frames) {
+					plays++
+					if anim.loops > 0 && plays > anim.loops {
+						return
+					}
+					next = 0
+				}
+				index = next
+				advanced = true
+				nextAt = nextAt.Add(frameDuration(anim.delays[index]))
+				if time.Now().Before(nextAt) {
+					break
+				}
+			}
+			if advanced {
+				procPostMessageW.Call(hwnd, wmUserAnim, uintptr(gen), uintptr(index))
+			}
+		}
+	}()
+}
+
+func (v *viewer) stopPlayback() {
+	// bumping the generation drops frames already queued in the message loop
+	v.animGen++
+	if v.animStop == nil {
+		return
+	}
+	close(v.animStop)
+	v.animStop = nil
+}
+
+func (v *viewer) showAnimationFrame(gen, index int) {
+	if v.anim == nil || gen != v.animGen || index < 0 || index >= len(v.anim.frames) {
+		return
+	}
+	v.animFrame = index
+	v.pixels = v.anim.frames[index]
+	procInvalidateRect.Call(v.hwnd, 0, 0)
+}
+
+func (v *viewer) togglePause() {
+	if v.anim == nil || len(v.anim.frames) < 2 {
+		return
+	}
+	v.paused = !v.paused
+	v.updatePlayback()
+}
+
+func (v *viewer) setSuspended(suspended bool) {
+	if v.suspended == suspended {
+		return
+	}
+	v.suspended = suspended
+	v.updatePlayback()
+}
+
+func frameDuration(ms int) time.Duration {
+	if ms <= 0 {
+		ms = 20
+	}
+	return time.Duration(ms) * time.Millisecond
+}
+
+// gif delays are short enough that the default 15.6 ms timer tick is visible
+func beginTimerResolution() {
+	procTimeBeginPeriod.Call(1)
+}
+
+func endTimerResolution() {
+	procTimeEndPeriod.Call(1)
 }
 
 func navButtonRects(width, height int) (winRect, winRect) {

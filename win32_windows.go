@@ -28,12 +28,17 @@ const (
 	wmMouseWheel     = 0x020A
 	wmCaptureChanged = 0x0215
 	wmUserFrame      = 0x0400 + 1 // WM_USER+1
+	wmUserAnim       = 0x0400 + 2 // WM_USER+2
+
+	// WM_SIZE
+	sizeMinimized = 1
 
 	// virtual keys
 	vkPrior = 0x21
 	vkNext  = 0x22
 	vkLeft  = 0x25
 	vkRight = 0x27
+	vkSpace = 0x20
 
 	// hit testing
 	htClient = 1
@@ -144,6 +149,9 @@ var (
 	procAlphaBlend            = msimg32.NewProc("AlphaBlend")
 	dwmapi                    = syscall.NewLazyDLL("dwmapi.dll")
 	procDwmSetWindowAttribute = dwmapi.NewProc("DwmSetWindowAttribute")
+	winmm                     = syscall.NewLazyDLL("winmm.dll")
+	procTimeBeginPeriod       = winmm.NewProc("timeBeginPeriod")
+	procTimeEndPeriod         = winmm.NewProc("timeEndPeriod")
 )
 
 type winRect struct {
