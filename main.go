@@ -12,7 +12,6 @@ import (
 	"image/gif"
 	_ "image/jpeg"
 	_ "image/png"
-	"io"
 	"math"
 	"os"
 	"path/filepath"
@@ -22,8 +21,8 @@ import (
 	"syscall"
 	"unsafe"
 
+	"github.com/SeriousBug/webp-go-pure/std"
 	_ "golang.org/x/image/bmp"
-	_ "golang.org/x/image/webp"
 )
 
 //go:embed assets/icon-16.png
@@ -387,7 +386,8 @@ var (
 	backgroundUniform = image.NewUniform(backgroundColor)
 )
 
-// loadFrame decodes one still frame; with full set it also expands a GIF animation
+// loadFrame decodes one still frame; with full set it also expands GIF and
+// animated WebP files
 func loadFrame(path string, maxWidth, maxHeight, animCap int, full bool) (*frame, error) {
 	file, err := os.Open(path)
 	if err != nil {
@@ -397,16 +397,8 @@ func loadFrame(path string, maxWidth, maxHeight, animCap int, full bool) (*frame
 
 	ext := strings.ToLower(filepath.Ext(path))
 
-	if ext == ".webp" {
-		if animatedWebP(file) {
-			return nil, fmt.Errorf("%s: animated WebP is not supported", path)
-		}
-		if _, err := file.Seek(0, io.SeekStart); err != nil {
-			return nil, err
-		}
-	}
-
-	if ext == ".gif" && full {
+	switch {
+	case ext == ".gif" && full:
 		decoded, err := gif.DecodeAll(file)
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", path, err)
@@ -415,6 +407,15 @@ func loadFrame(path string, maxWidth, maxHeight, animCap int, full bool) (*frame
 			return nil, fmt.Errorf("%s: empty gif", path)
 		}
 		return gifFrame(decoded, maxWidth, maxHeight, animCap), nil
+	case ext == ".webp" && full:
+		decoded, err := webp.DecodeAll(file)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", path, err)
+		}
+		if len(decoded.Image) == 0 {
+			return nil, fmt.Errorf("%s: empty webp", path)
+		}
+		return webpFrame(decoded, maxWidth, maxHeight, animCap), nil
 	}
 
 	img, _, err := image.Decode(file)
@@ -423,8 +424,8 @@ func loadFrame(path string, maxWidth, maxHeight, animCap int, full bool) (*frame
 	}
 
 	f := stillFrame(img, maxWidth, maxHeight)
-	// only the first frame is decoded here, the rest waits until the gif is opened
-	f.partial = ext == ".gif" && !full
+	// only the first frame is decoded here, the animation waits until it is opened
+	f.partial = (ext == ".gif" || ext == ".webp") && !full
 	return f, nil
 }
 
@@ -447,13 +448,10 @@ func stillFrame(img image.Image, maxWidth, maxHeight int) *frame {
 	}
 }
 
-// gifFrame composites every GIF frame into a full canvas, then keeps as many
-// frames as the memory cap allows
+// gifFrame composites every GIF frame into a full canvas and hands the sequence
+// to prepareAnimation
 func gifFrame(decoded *gif.GIF, maxWidth, maxHeight, animCap int) *frame {
 	count := len(decoded.Image)
-	if count == 1 {
-		return stillFrame(decoded.Image[0], maxWidth, maxHeight)
-	}
 
 	width, height := decoded.Config.Width, decoded.Config.Height
 	if width <= 0 || height <= 0 {
@@ -461,27 +459,11 @@ func gifFrame(decoded *gif.GIF, maxWidth, maxHeight, animCap int) *frame {
 		width, height = bounds.Dx(), bounds.Dy()
 	}
 
-	scale := fitScale(width, height, maxWidth, maxHeight)
-	drawWidth, drawHeight := scaledSize(width, height, scale)
-
-	step := frameStep(count, drawWidth*drawHeight*4, animCap)
-	kept := (count + step - 1) / step
-	if frameBytes := drawWidth * drawHeight * 4; kept*frameBytes > animCap {
-		scale *= math.Sqrt(float64(animCap) / float64(kept*frameBytes))
-		drawWidth, drawHeight = scaledSize(width, height, scale)
-	}
-
 	canvas := image.NewRGBA(image.Rect(0, 0, width, height))
-	scratch := image.NewRGBA(image.Rect(0, 0, width, height))
-	frames := make([][]byte, 0, kept)
-	delays := make([]int, 0, kept)
-
 	var saved *image.RGBA
-	var savedRect image.Rectangle
-	var previous image.Rectangle
-	pending := 0
+	var savedRect, previous image.Rectangle
 
-	for i, src := range decoded.Image {
+	frameAt := func(i int) image.Image {
 		if i > 0 {
 			switch decoded.Disposal[i-1] {
 			case gif.DisposalBackground:
@@ -493,18 +475,81 @@ func gifFrame(decoded *gif.GIF, maxWidth, maxHeight, animCap int) *frame {
 			}
 		}
 
-		bounds := src.Bounds().Intersect(canvas.Bounds())
+		bounds := decoded.Image[i].Bounds().Intersect(canvas.Bounds())
 		if i < count-1 && decoded.Disposal[i] == gif.DisposalPrevious {
 			savedRect = bounds
 			saved = image.NewRGBA(image.Rect(0, 0, bounds.Dx(), bounds.Dy()))
 			draw.Draw(saved, saved.Bounds(), canvas, bounds.Min, draw.Src)
 		}
-		draw.Draw(canvas, bounds, src, bounds.Min, draw.Over)
+		draw.Draw(canvas, bounds, decoded.Image[i], bounds.Min, draw.Over)
 		previous = bounds
+		return canvas
+	}
 
-		pending += frameDelay(decoded.Delay[i])
+	delays := make([]int, count)
+	for i, delay := range decoded.Delay {
+		delays[i] = frameDelay(delay)
+	}
+
+	return prepareAnimation(animationSource{
+		count:   count,
+		width:   width,
+		height:  height,
+		delays:  delays,
+		loops:   loopCount(decoded.LoopCount),
+		frameAt: frameAt,
+	}, maxWidth, maxHeight, animCap)
+}
+
+// webpFrame uses the frames the decoder already composited
+func webpFrame(decoded *webp.Animation, maxWidth, maxHeight, animCap int) *frame {
+	return prepareAnimation(animationSource{
+		count:   len(decoded.Image),
+		width:   decoded.Config.Width,
+		height:  decoded.Config.Height,
+		delays:  decoded.Delay,
+		loops:   loopCount(decoded.LoopCount),
+		frameAt: func(i int) image.Image { return decoded.Image[i] },
+	}, maxWidth, maxHeight, animCap)
+}
+
+// animationSource feeds prepareAnimation with frames that are already composited
+type animationSource struct {
+	count   int
+	width   int
+	height  int
+	delays  []int // how long each frame stays on screen, ms
+	loops   int   // 0 plays forever
+	frameAt func(index int) image.Image
+}
+
+// prepareAnimation scales the frames to the window and keeps as many as the
+// memory cap allows
+func prepareAnimation(src animationSource, maxWidth, maxHeight, animCap int) *frame {
+	if src.count == 1 {
+		return stillFrame(src.frameAt(0), maxWidth, maxHeight)
+	}
+
+	scale := fitScale(src.width, src.height, maxWidth, maxHeight)
+	drawWidth, drawHeight := scaledSize(src.width, src.height, scale)
+
+	step := frameStep(src.count, drawWidth*drawHeight*4, animCap)
+	kept := (src.count + step - 1) / step
+	if frameBytes := drawWidth * drawHeight * 4; kept*frameBytes > animCap {
+		scale *= math.Sqrt(float64(animCap) / float64(kept*frameBytes))
+		drawWidth, drawHeight = scaledSize(src.width, src.height, scale)
+	}
+
+	scratch := image.NewRGBA(image.Rect(0, 0, src.width, src.height))
+	frames := make([][]byte, 0, kept)
+	delays := make([]int, 0, kept)
+	pending := 0
+
+	for i := 0; i < src.count; i++ {
+		img := src.frameAt(i)
+		pending += src.delays[i]
 		if i%step == 0 {
-			frames = append(frames, flattenFrame(canvas, scratch, drawWidth, drawHeight))
+			frames = append(frames, flattenFrame(img, scratch, drawWidth, drawHeight))
 			delays = append(delays, pending)
 			pending = 0
 		}
@@ -522,7 +567,7 @@ func gifFrame(decoded *gif.GIF, maxWidth, maxHeight, animCap int) *frame {
 		anim: &animation{
 			frames: frames,
 			delays: delays,
-			loops:  loopCount(decoded.LoopCount),
+			loops:  src.loops,
 		},
 	}
 }
@@ -537,9 +582,9 @@ func frameStep(count, frameBytes, capBytes int) int {
 }
 
 // flattenFrame drops the transparency onto the viewer background and scales down
-func flattenFrame(canvas, scratch *image.RGBA, width, height int) []byte {
+func flattenFrame(canvas image.Image, scratch *image.RGBA, width, height int) []byte {
 	draw.Draw(scratch, scratch.Bounds(), backgroundUniform, image.Point{}, draw.Src)
-	draw.Draw(scratch, scratch.Bounds(), canvas, image.Point{}, draw.Over)
+	draw.Draw(scratch, scratch.Bounds(), canvas, canvas.Bounds().Min, draw.Over)
 
 	out := scratch
 	if width != scratch.Bounds().Dx() || height != scratch.Bounds().Dy() {
@@ -582,19 +627,6 @@ func fitScale(width, height, maxWidth, maxHeight int) float64 {
 
 func scaledSize(width, height int, scale float64) (int, int) {
 	return max(int(float64(width)*scale+0.5), 1), max(int(float64(height)*scale+0.5), 1)
-}
-
-// animatedWebP reports whether the file header marks it as an animation
-func animatedWebP(r io.Reader) bool {
-	var header [21]byte
-	if _, err := io.ReadFull(r, header[:]); err != nil {
-		return false
-	}
-	const animationBit = 0x02
-	return string(header[0:4]) == "RIFF" &&
-		string(header[8:12]) == "WEBP" &&
-		string(header[12:16]) == "VP8X" &&
-		header[20]&animationBit != 0
 }
 
 func toBGRA(img *image.RGBA) []byte {
