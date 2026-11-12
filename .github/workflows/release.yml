@@ -64,7 +64,7 @@ jobs:
           if ($ref -match '^v(.+)$') {
             $version = $Matches[1]
           } else {
-            $version = '0.0.0-dev'
+            $version = '0.0-dev'
           }
 
           $core = ($version -split '[-+]')[0]
