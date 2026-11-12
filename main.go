@@ -287,7 +287,7 @@ func wndProc(hwnd, msg, wParam, lParam uintptr) uintptr {
 
 func parseArgs(args []string) (string, int, error) {
 	const usage = "Drag & drop an image onto piclent.exe to open it."
-	budget := 256
+	budget := 512
 	path := ""
 
 	for i := 0; i < len(args); i++ {
