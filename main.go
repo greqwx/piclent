@@ -20,6 +20,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"unsafe"
 
@@ -555,8 +556,9 @@ func exifOrientation(tiff []byte) int {
 }
 
 var (
-	backgroundColor   = color.RGBA{R: 0x1c, G: 0x20, B: 0x28, A: 0xff}
-	backgroundUniform = image.NewUniform(backgroundColor)
+	backgroundRed   = uint64(0x1c)
+	backgroundGreen = uint64(0x20)
+	backgroundBlue  = uint64(0x28)
 )
 
 // loadFrame decodes one still frame; with full set it also expands GIF and
@@ -612,61 +614,237 @@ func loadFrame(path string, maxWidth, maxHeight, animCap int, full bool) (*frame
 
 func stillFrame(img image.Image, orientation, maxWidth, maxHeight int) *frame {
 	bounds := img.Bounds()
-	rgba := image.NewRGBA(image.Rect(0, 0, bounds.Dx(), bounds.Dy()))
-	draw.Draw(rgba, rgba.Bounds(), backgroundUniform, image.Point{}, draw.Src)
-	draw.Draw(rgba, rgba.Bounds(), img, bounds.Min, draw.Over)
-	rgba = orientRGBA(rgba, orientation)
-
-	width, height := rgba.Bounds().Dx(), rgba.Bounds().Dy()
+	width, height := bounds.Dx(), bounds.Dy()
+	if orientation >= 5 && orientation <= 8 {
+		width, height = height, width
+	}
 	if scale := fitScale(width, height, maxWidth, maxHeight); scale < 1 {
 		width, height = scaledSize(width, height, scale)
-		rgba = downscale(rgba, width, height)
 	}
 
 	return &frame{
-		pixels: toBGRA(rgba),
+		pixels: renderFrame(img, orientation, width, height),
 		width:  width,
 		height: height,
 	}
 }
 
-// orientRGBA rearranges pixels the way the EXIF orientation tag says; values
-// 5..8 swap the width and height
-func orientRGBA(src *image.RGBA, orientation int) *image.RGBA {
-	width, height := src.Bounds().Dx(), src.Bounds().Dy()
-	if orientation < 2 || orientation > 8 || width < 1 || height < 1 {
-		return src
+// renderFrame scales, orients and flattens a decoded image into top-down BGRA
+// pixels in one pass, without materializing a full-size RGBA copy
+func renderFrame(img image.Image, orientation, width, height int) []byte {
+	pixels := make([]byte, width*height*4)
+	if width < 1 || height < 1 {
+		return pixels
 	}
 
-	dstWidth, dstHeight := width, height
-	if orientation >= 5 {
-		dstWidth, dstHeight = height, width
+	bounds := img.Bounds()
+	displayWidth, displayHeight := bounds.Dx(), bounds.Dy()
+	if orientation >= 5 && orientation <= 8 {
+		displayWidth, displayHeight = displayHeight, displayWidth
 	}
-	dst := image.NewRGBA(image.Rect(0, 0, dstWidth, dstHeight))
 
-	for y := 0; y < dstHeight; y++ {
-		for x := 0; x < dstWidth; x++ {
-			var sx, sy int
-			switch orientation {
-			case 2:
-				sx, sy = width-1-x, y
-			case 3:
-				sx, sy = width-1-x, height-1-y
-			case 4:
-				sx, sy = x, height-1-y
-			case 5:
-				sx, sy = y, x
-			case 6:
-				sx, sy = y, height-1-x
-			case 7:
-				sx, sy = width-1-y, height-1-x
-			case 8:
-				sx, sy = width-1-y, x
+	workers := runtime.GOMAXPROCS(0)
+	if workers > height {
+		workers = height
+	}
+	if width*height < 1<<20 || workers < 2 {
+		renderRows(img, orientation, displayWidth, displayHeight, width, height, pixels, 0, height)
+		return pixels
+	}
+
+	var wg sync.WaitGroup
+	for worker := 0; worker < workers; worker++ {
+		start := worker * height / workers
+		end := (worker + 1) * height / workers
+		wg.Add(1)
+		go func(start, end int) {
+			defer wg.Done()
+			renderRows(img, orientation, displayWidth, displayHeight, width, height, pixels, start, end)
+		}(start, end)
+	}
+	wg.Wait()
+	return pixels
+}
+
+func renderRows(img image.Image, orientation, displayWidth, displayHeight, width, height int, pixels []byte, startY, endY int) {
+	switch src := img.(type) {
+	case *image.YCbCr:
+		renderYCbCrRows(src, orientation, displayWidth, displayHeight, width, height, pixels, startY, endY)
+	case *image.RGBA:
+		renderColorRows(src.Pix, src.Stride, src.Bounds().Dx(), src.Bounds().Dy(), true,
+			orientation, displayWidth, displayHeight, width, height, pixels, startY, endY)
+	case *image.NRGBA:
+		renderColorRows(src.Pix, src.Stride, src.Bounds().Dx(), src.Bounds().Dy(), false,
+			orientation, displayWidth, displayHeight, width, height, pixels, startY, endY)
+	default:
+		renderGenericRows(img, orientation, displayWidth, displayHeight, width, height, pixels, startY, endY)
+	}
+}
+
+func renderYCbCrRows(src *image.YCbCr, orientation, displayWidth, displayHeight, width, height int, out []byte, startY, endY int) {
+	bounds := src.Bounds()
+	srcWidth, srcHeight := bounds.Dx(), bounds.Dy()
+
+	shiftX, shiftY := 0, 0
+	switch src.SubsampleRatio {
+	case image.YCbCrSubsampleRatio422:
+		shiftX = 1
+	case image.YCbCrSubsampleRatio420:
+		shiftX, shiftY = 1, 1
+	case image.YCbCrSubsampleRatio440:
+		shiftY = 1
+	case image.YCbCrSubsampleRatio411:
+		shiftX = 2
+	case image.YCbCrSubsampleRatio410:
+		shiftX, shiftY = 2, 1
+	}
+
+	for y := startY; y < endY; y++ {
+		oy0, oy1 := scaledRange(y, height, displayHeight)
+		row := out[y*width*4:]
+		for x := 0; x < width; x++ {
+			ox0, ox1 := scaledRange(x, width, displayWidth)
+			sx0, sy0, sx1, sy1 := sourceBox(orientation, ox0, ox1, oy0, oy1, srcWidth, srcHeight)
+
+			var sumY, sumCb, sumCr, count uint64
+			for sy := sy0; sy < sy1; sy++ {
+				yOffset := sy * src.YStride
+				cOffset := (sy >> shiftY) * src.CStride
+				for sx := sx0; sx < sx1; sx++ {
+					sumY += uint64(src.Y[yOffset+sx])
+					ci := cOffset + (sx >> shiftX)
+					sumCb += uint64(src.Cb[ci])
+					sumCr += uint64(src.Cr[ci])
+				}
+				count += uint64(sx1 - sx0)
 			}
-			copy(dst.Pix[y*dst.Stride+x*4:y*dst.Stride+x*4+4], src.Pix[sy*src.Stride+sx*4:])
+			if count == 0 {
+				continue
+			}
+
+			red, green, blue := color.YCbCrToRGB(uint8(sumY/count), uint8(sumCb/count), uint8(sumCr/count))
+			i := x * 4
+			row[i] = blue
+			row[i+1] = green
+			row[i+2] = red
+			row[i+3] = 0xff
 		}
 	}
-	return dst
+}
+
+func renderColorRows(pixels []byte, stride, srcWidth, srcHeight int, premultiplied bool, orientation, displayWidth, displayHeight, width, height int, out []byte, startY, endY int) {
+	for y := startY; y < endY; y++ {
+		oy0, oy1 := scaledRange(y, height, displayHeight)
+		row := out[y*width*4:]
+		for x := 0; x < width; x++ {
+			ox0, ox1 := scaledRange(x, width, displayWidth)
+			sx0, sy0, sx1, sy1 := sourceBox(orientation, ox0, ox1, oy0, oy1, srcWidth, srcHeight)
+
+			var sumR, sumG, sumB, sumA, count uint64
+			for sy := sy0; sy < sy1; sy++ {
+				offset := sy*stride + sx0*4
+				for sx := sx0; sx < sx1; sx++ {
+					alpha := uint64(pixels[offset+3])
+					if premultiplied {
+						sumR += uint64(pixels[offset]) * 255
+						sumG += uint64(pixels[offset+1]) * 255
+						sumB += uint64(pixels[offset+2]) * 255
+					} else {
+						sumR += uint64(pixels[offset]) * alpha
+						sumG += uint64(pixels[offset+1]) * alpha
+						sumB += uint64(pixels[offset+2]) * alpha
+					}
+					sumA += alpha
+					offset += 4
+				}
+				count += uint64(sx1 - sx0)
+			}
+			if count == 0 {
+				continue
+			}
+
+			denominator := count * 255
+			weight := denominator - sumA
+			i := x * 4
+			row[i] = blendChannel(sumB, backgroundBlue, weight, denominator)
+			row[i+1] = blendChannel(sumG, backgroundGreen, weight, denominator)
+			row[i+2] = blendChannel(sumR, backgroundRed, weight, denominator)
+			row[i+3] = 0xff
+		}
+	}
+}
+
+func renderGenericRows(img image.Image, orientation, displayWidth, displayHeight, width, height int, out []byte, startY, endY int) {
+	bounds := img.Bounds()
+	minX, minY := bounds.Min.X, bounds.Min.Y
+	srcWidth, srcHeight := bounds.Dx(), bounds.Dy()
+
+	for y := startY; y < endY; y++ {
+		oy0, oy1 := scaledRange(y, height, displayHeight)
+		row := out[y*width*4:]
+		for x := 0; x < width; x++ {
+			ox0, ox1 := scaledRange(x, width, displayWidth)
+			sx0, sy0, sx1, sy1 := sourceBox(orientation, ox0, ox1, oy0, oy1, srcWidth, srcHeight)
+
+			var sumR, sumG, sumB, sumA, count uint64
+			for sy := sy0; sy < sy1; sy++ {
+				for sx := sx0; sx < sx1; sx++ {
+					red, green, blue, alpha := img.At(minX+sx, minY+sy).RGBA()
+					sumR += uint64(red>>8) * 255
+					sumG += uint64(green>>8) * 255
+					sumB += uint64(blue>>8) * 255
+					sumA += uint64(alpha >> 8)
+				}
+				count += uint64(sx1 - sx0)
+			}
+			if count == 0 {
+				continue
+			}
+
+			denominator := count * 255
+			weight := denominator - sumA
+			i := x * 4
+			row[i] = blendChannel(sumB, backgroundBlue, weight, denominator)
+			row[i+1] = blendChannel(sumG, backgroundGreen, weight, denominator)
+			row[i+2] = blendChannel(sumR, backgroundRed, weight, denominator)
+			row[i+3] = 0xff
+		}
+	}
+}
+
+// scaledRange maps a destination pixel back to its span in the source
+func scaledRange(position, destSize, sourceSize int) (int, int) {
+	start := position * sourceSize / destSize
+	end := (position + 1) * sourceSize / destSize
+	if end <= start {
+		end = start + 1
+	}
+	return start, end
+}
+
+// sourceBox maps a box in oriented coordinates back to the stored image
+func sourceBox(orientation, ox0, ox1, oy0, oy1, width, height int) (int, int, int, int) {
+	switch orientation {
+	case 2:
+		return width - ox1, oy0, width - ox0, oy1
+	case 3:
+		return width - ox1, height - oy1, width - ox0, height - oy0
+	case 4:
+		return ox0, height - oy1, ox1, height - oy0
+	case 5:
+		return oy0, ox0, oy1, ox1
+	case 6:
+		return oy0, height - ox1, oy1, height - ox0
+	case 7:
+		return width - oy1, height - ox1, width - oy0, height - ox0
+	case 8:
+		return width - oy1, ox0, width - oy0, ox1
+	}
+	return ox0, oy0, ox1, oy1
+}
+
+func blendChannel(sum, background, weight, denominator uint64) byte {
+	return byte((sum + background*weight + denominator/2) / denominator)
 }
 
 // gifFrame composites every GIF frame into a full canvas and hands the sequence
@@ -761,7 +939,6 @@ func prepareAnimation(src animationSource, maxWidth, maxHeight, animCap int) *fr
 		drawWidth, drawHeight = scaledSize(src.width, src.height, scale)
 	}
 
-	scratch := image.NewRGBA(image.Rect(0, 0, src.width, src.height))
 	frames := make([][]byte, 0, kept)
 	delays := make([]int, 0, kept)
 	pending := 0
@@ -770,7 +947,7 @@ func prepareAnimation(src animationSource, maxWidth, maxHeight, animCap int) *fr
 		img := src.frameAt(i)
 		pending += src.delays[i]
 		if i%step == 0 {
-			frames = append(frames, flattenFrame(img, scratch, drawWidth, drawHeight))
+			frames = append(frames, flattenFrame(img, drawWidth, drawHeight))
 			delays = append(delays, pending)
 			pending = 0
 		}
@@ -802,16 +979,10 @@ func frameStep(count, frameBytes, capBytes int) int {
 	return max(1, (count+maxFrames-1)/maxFrames)
 }
 
-// flattenFrame drops the transparency onto the viewer background and scales down
-func flattenFrame(canvas image.Image, scratch *image.RGBA, width, height int) []byte {
-	draw.Draw(scratch, scratch.Bounds(), backgroundUniform, image.Point{}, draw.Src)
-	draw.Draw(scratch, scratch.Bounds(), canvas, canvas.Bounds().Min, draw.Over)
-
-	out := scratch
-	if width != scratch.Bounds().Dx() || height != scratch.Bounds().Dy() {
-		out = downscale(scratch, width, height)
-	}
-	return toBGRA(out)
+// flattenFrame drops transparency onto the viewer background, scales down and
+// returns the frame in BGRA
+func flattenFrame(canvas image.Image, width, height int) []byte {
+	return renderFrame(canvas, 1, width, height)
 }
 
 // frameDelay turns a GIF centisecond delay into milliseconds, using the same
@@ -848,56 +1019,6 @@ func fitScale(width, height, maxWidth, maxHeight int) float64 {
 
 func scaledSize(width, height int, scale float64) (int, int) {
 	return max(int(float64(width)*scale+0.5), 1), max(int(float64(height)*scale+0.5), 1)
-}
-
-func toBGRA(img *image.RGBA) []byte {
-	pixels := make([]byte, len(img.Pix))
-	for i := 0; i < len(img.Pix); i += 4 {
-		pixels[i] = img.Pix[i+2]
-		pixels[i+1] = img.Pix[i+1]
-		pixels[i+2] = img.Pix[i]
-		pixels[i+3] = 0xff
-	}
-	return pixels
-}
-
-func downscale(src *image.RGBA, width, height int) *image.RGBA {
-	dst := image.NewRGBA(image.Rect(0, 0, width, height))
-	srcWidth := src.Bounds().Dx()
-	srcHeight := src.Bounds().Dy()
-
-	for y := 0; y < height; y++ {
-		y0 := y * srcHeight / height
-		y1 := (y + 1) * srcHeight / height
-		if y1 <= y0 {
-			y1 = y0 + 1
-		}
-		for x := 0; x < width; x++ {
-			x0 := x * srcWidth / width
-			x1 := (x + 1) * srcWidth / width
-			if x1 <= x0 {
-				x1 = x0 + 1
-			}
-			var r, g, b, a uint64
-			for sy := y0; sy < y1; sy++ {
-				row := src.Pix[sy*src.Stride:]
-				for sx := x0; sx < x1; sx++ {
-					i := sx * 4
-					r += uint64(row[i])
-					g += uint64(row[i+1])
-					b += uint64(row[i+2])
-					a += uint64(row[i+3])
-				}
-			}
-			count := uint64((y1 - y0) * (x1 - x0))
-			i := y*dst.Stride + x*4
-			dst.Pix[i] = uint8((r + count/2) / count)
-			dst.Pix[i+1] = uint8((g + count/2) / count)
-			dst.Pix[i+2] = uint8((b + count/2) / count)
-			dst.Pix[i+3] = uint8((a + count/2) / count)
-		}
-	}
-	return dst
 }
 
 func initialWindowSize(imageWidth, imageHeight, areaWidth, areaHeight int) (int, int) {
