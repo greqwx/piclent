@@ -61,6 +61,13 @@ const (
 	fofAllowUndo      = 0x0040
 	fofNoErrorUI      = 0x0400
 
+	// GetOpenFileNameW
+	ofnHideReadOnly  = 0x00000004
+	ofnNoChangeDir   = 0x00000008
+	ofnPathMustExist = 0x00000800
+	ofnFileMustExist = 0x00001000
+	ofnExplorer      = 0x00080000
+
 	// SetWindowPos
 	swpNoSize       = 0x0001
 	swpNoMove       = 0x0002
@@ -186,6 +193,8 @@ var (
 	procDragAcceptFiles       = shell32.NewProc("DragAcceptFiles")
 	procDragQueryFileW        = shell32.NewProc("DragQueryFileW")
 	procDragFinish            = shell32.NewProc("DragFinish")
+	comdlg32                  = syscall.NewLazyDLL("comdlg32.dll")
+	procGetOpenFileNameW      = comdlg32.NewProc("GetOpenFileNameW")
 	dwmapi                    = syscall.NewLazyDLL("dwmapi.dll")
 	procDwmSetWindowAttribute = dwmapi.NewProc("DwmSetWindowAttribute")
 	winmm                     = syscall.NewLazyDLL("winmm.dll")
@@ -224,6 +233,32 @@ type shFileOpStructW struct {
 	fAnyOperationsAborted int32
 	hNameMappings         uintptr
 	lpszProgressTitle     *uint16
+}
+
+type openFileNameW struct {
+	length        uint32
+	hwndOwner     uintptr
+	hInstance     uintptr
+	filter        *uint16
+	customFilter  *uint16
+	maxCustFilter uint32
+	filterIndex   uint32
+	file          *uint16
+	maxFile       uint32
+	fileTitle     *uint16
+	maxFileTitle  uint32
+	initialDir    *uint16
+	title         *uint16
+	flags         uint32
+	fileOffset    uint16
+	fileExtension uint16
+	defaultExt    *uint16
+	custData      uintptr
+	hook          uintptr
+	templateName  *uint16
+	reserved      uintptr
+	reserved2     uint32
+	flagsEx       uint32
 }
 
 type wndClassExW struct {

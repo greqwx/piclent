@@ -74,6 +74,12 @@ func run() int {
 		fatal("%v", err)
 		return 2
 	}
+	if path == "" {
+		path = openImageDialog()
+		if path == "" {
+			return 0
+		}
+	}
 	path = filepath.Clean(path)
 
 	config, err := readConfig(path)
@@ -352,7 +358,7 @@ func wndProc(hwnd, msg, wParam, lParam uintptr) uintptr {
 }
 
 func parseArgs(args []string) (string, int, error) {
-	const usage = "Drag & drop an image onto piclent.exe to open it."
+	const usage = "Usage: piclent.exe [image]"
 	budget := 512
 	path := ""
 
@@ -386,7 +392,7 @@ func parseArgs(args []string) (string, int, error) {
 	}
 
 	if path == "" {
-		return "", 0, fmt.Errorf("%s", usage)
+		return "", budget, nil
 	}
 	return path, budget, nil
 }
