@@ -3,11 +3,14 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
+	"syscall"
+	"unsafe"
 )
 
 const prefetchRadius = 2
@@ -101,6 +104,10 @@ func (g *gallery) start(maxWidth, maxHeight int) {
 
 			g.mu.Lock()
 			g.busy = ""
+			if !g.containsLocked(path) {
+				g.mu.Unlock()
+				continue
+			}
 			current := g.paths[g.index] == path
 			if err != nil {
 				if old := g.cache[path]; old != nil && old.partial {
@@ -178,6 +185,9 @@ func (g *gallery) snapshot() (*frame, string) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
+	if len(g.paths) == 0 {
+		return nil, ""
+	}
 	path := g.paths[g.index]
 	if f := g.cache[path]; f != nil {
 		g.touchLocked(path)
@@ -196,6 +206,73 @@ func (g *gallery) currentName() string {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	return filepath.Base(g.paths[g.index])
+}
+
+func (g *gallery) currentPath() string {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if len(g.paths) == 0 {
+		return ""
+	}
+	return g.paths[g.index]
+}
+
+// recycleFile sends the file to the Recycle Bin
+func recycleFile(path string) error {
+	// SHFileOperation needs a fully qualified path
+	absolute, err := filepath.Abs(path)
+	if err != nil {
+		return err
+	}
+	from, err := syscall.UTF16FromString(absolute)
+	if err != nil {
+		return err
+	}
+	// the path list is terminated by an empty string
+	from = append(from, 0)
+
+	op := shFileOpStructW{
+		wFunc:  foDelete,
+		pFrom:  &from[0],
+		fFlags: fofSilent | fofNoConfirmation | fofAllowUndo | fofNoErrorUI,
+	}
+	if result, _, _ := procSHFileOperationW.Call(uintptr(unsafe.Pointer(&op))); result != 0 {
+		return fmt.Errorf("cannot move %s to the Recycle Bin", filepath.Base(path))
+	}
+	if op.fAnyOperationsAborted != 0 {
+		return fmt.Errorf("%s was not deleted", filepath.Base(path))
+	}
+	return nil
+}
+
+func (g *gallery) containsLocked(path string) bool {
+	for _, p := range g.paths {
+		if p == path {
+			return true
+		}
+	}
+	return false
+}
+
+// forgetCurrent drops the current entry after its file left the disk and
+// returns how many files are left
+func (g *gallery) forgetCurrent() int {
+	g.mu.Lock()
+	path := g.paths[g.index]
+	g.paths = append(g.paths[:g.index], g.paths[g.index+1:]...)
+	if old := g.cache[path]; old != nil {
+		g.bytes -= old.size()
+		g.removeLocked(path)
+	}
+	delete(g.errors, path)
+	if g.index >= len(g.paths) {
+		g.index = len(g.paths) - 1
+	}
+	remaining := len(g.paths)
+	g.mu.Unlock()
+
+	g.notify()
+	return remaining
 }
 
 func (g *gallery) storeLocked(path string, f *frame) {

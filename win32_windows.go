@@ -43,6 +43,14 @@ const (
 	vkSpace  = 0x20
 	vkEscape = 0x1B
 	vkF11    = 0x7A
+	vkDelete = 0x2E
+
+	// SHFileOperationW
+	foDelete          = 0x0003
+	fofSilent         = 0x0004
+	fofNoConfirmation = 0x0010
+	fofAllowUndo      = 0x0040
+	fofNoErrorUI      = 0x0400
 
 	// SetWindowPos
 	swpNoSize       = 0x0001
@@ -164,6 +172,8 @@ var (
 
 	msimg32                   = syscall.NewLazyDLL("msimg32.dll")
 	procAlphaBlend            = msimg32.NewProc("AlphaBlend")
+	shell32                   = syscall.NewLazyDLL("shell32.dll")
+	procSHFileOperationW      = shell32.NewProc("SHFileOperationW")
 	dwmapi                    = syscall.NewLazyDLL("dwmapi.dll")
 	procDwmSetWindowAttribute = dwmapi.NewProc("DwmSetWindowAttribute")
 	winmm                     = syscall.NewLazyDLL("winmm.dll")
@@ -191,6 +201,17 @@ type windowPlacement struct {
 	ptMinPosition    point
 	ptMaxPosition    point
 	rcNormalPosition winRect
+}
+
+type shFileOpStructW struct {
+	hwnd                  uintptr
+	wFunc                 uint32
+	pFrom                 *uint16
+	pTo                   *uint16
+	fFlags                uint16
+	fAnyOperationsAborted int32
+	hNameMappings         uintptr
+	lpszProgressTitle     *uint16
 }
 
 type wndClassExW struct {

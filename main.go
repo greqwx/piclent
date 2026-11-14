@@ -237,6 +237,9 @@ func wndProc(hwnd, msg, wParam, lParam uintptr) uintptr {
 			case vkEscape:
 				v.exitFullscreen()
 				return 0
+			case vkDelete:
+				v.deleteCurrent()
+				return 0
 			}
 		}
 

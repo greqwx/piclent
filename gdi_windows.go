@@ -386,6 +386,42 @@ func (v *viewer) exitFullscreen() {
 	procInvalidateRect.Call(v.hwnd, 0, 0)
 }
 
+// deleteCurrent moves the open file to the Recycle Bin and shows the next one
+func (v *viewer) deleteCurrent() {
+	if v.gallery == nil {
+		return
+	}
+	path := v.gallery.currentPath()
+	if path == "" {
+		return
+	}
+
+	if err := recycleFile(path); err != nil {
+		v.message = err.Error()
+		v.pixels = nil
+		v.width = 0
+		v.height = 0
+		v.anim = nil
+		v.animFrame = 0
+		v.stopPlayback()
+		procInvalidateRect.Call(v.hwnd, 0, 0)
+		return
+	}
+
+	if v.gallery.forgetCurrent() == 0 {
+		procPostMessageW.Call(v.hwnd, wmClose, 0, 0)
+		return
+	}
+
+	v.zoom = minZoom
+	v.offsetX = 0
+	v.offsetY = 0
+	v.message = ""
+	v.paused = false
+	v.updateTitle()
+	v.refresh()
+}
+
 func frameDuration(ms int) time.Duration {
 	if ms <= 0 {
 		ms = 20
