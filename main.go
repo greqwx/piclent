@@ -141,6 +141,8 @@ func run() int {
 	darkMode := uint32(1)
 	procDwmSetWindowAttribute.Call(hwnd, dwmwaUseImmersiveDarkMode, uintptr(unsafe.Pointer(&darkMode)), unsafe.Sizeof(darkMode))
 
+	procDragAcceptFiles.Call(hwnd, 1)
+
 	// store viewer pointer in window's user data
 	v := &viewer{hwnd: hwnd, zoom: minZoom, gallery: g}
 	activeViewer = v
@@ -209,6 +211,13 @@ func wndProc(hwnd, msg, wParam, lParam uintptr) uintptr {
 
 	case wmEraseBkgnd:
 		return 1 // prevent flicker — WM_PAINT handles background
+
+	case wmDropFiles:
+		path := droppedFile(wParam)
+		if v := getViewer(hwnd); v != nil && isImageFile(path) {
+			v.openPath(path)
+		}
+		return 0
 
 	case wmMouseWheel:
 		v := getViewer(hwnd)
@@ -368,6 +377,22 @@ func parseArgs(args []string) (string, int, error) {
 
 func mousePoint(lParam uintptr) (int, int) {
 	return int(int16(uint16(lParam))), int(int16(uint16(lParam >> 16)))
+}
+
+// droppedFile takes the first path out of a WM_DROPFILES handle and always
+// finishes the drop
+func droppedFile(hDrop uintptr) string {
+	defer procDragFinish.Call(hDrop)
+
+	length, _, _ := procDragQueryFileW.Call(hDrop, 0, 0, 0)
+	if length == 0 {
+		return ""
+	}
+	buffer := make([]uint16, length+1)
+	if copied, _, _ := procDragQueryFileW.Call(hDrop, 0, uintptr(unsafe.Pointer(&buffer[0])), uintptr(len(buffer))); copied == 0 {
+		return ""
+	}
+	return syscall.UTF16ToString(buffer)
 }
 
 func getViewer(hwnd uintptr) *viewer {

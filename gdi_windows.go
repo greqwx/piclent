@@ -4,6 +4,7 @@ package main
 
 import (
 	"math"
+	"path/filepath"
 	"syscall"
 	"time"
 	"unsafe"
@@ -418,6 +419,28 @@ func (v *viewer) deleteCurrent() {
 	v.offsetY = 0
 	v.message = ""
 	v.paused = false
+	v.updateTitle()
+	v.refresh()
+}
+
+// openPath switches to a file dropped onto the window
+func (v *viewer) openPath(path string) {
+	if v.gallery == nil {
+		return
+	}
+	v.gallery.reset(filepath.Clean(path))
+
+	v.zoom = minZoom
+	v.offsetX = 0
+	v.offsetY = 0
+	v.message = ""
+	v.pixels = nil
+	v.width = 0
+	v.height = 0
+	v.anim = nil
+	v.animFrame = 0
+	v.paused = false
+	v.stopPlayback()
 	v.updateTitle()
 	v.refresh()
 }

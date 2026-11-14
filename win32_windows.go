@@ -29,6 +29,7 @@ const (
 	wmRButtonUp      = 0x0205
 	wmMouseWheel     = 0x020A
 	wmCaptureChanged = 0x0215
+	wmDropFiles      = 0x0233
 	wmUserFrame      = 0x0400 + 1 // WM_USER+1
 	wmUserAnim       = 0x0400 + 2 // WM_USER+2
 
@@ -174,6 +175,9 @@ var (
 	procAlphaBlend            = msimg32.NewProc("AlphaBlend")
 	shell32                   = syscall.NewLazyDLL("shell32.dll")
 	procSHFileOperationW      = shell32.NewProc("SHFileOperationW")
+	procDragAcceptFiles       = shell32.NewProc("DragAcceptFiles")
+	procDragQueryFileW        = shell32.NewProc("DragQueryFileW")
+	procDragFinish            = shell32.NewProc("DragFinish")
 	dwmapi                    = syscall.NewLazyDLL("dwmapi.dll")
 	procDwmSetWindowAttribute = dwmapi.NewProc("DwmSetWindowAttribute")
 	winmm                     = syscall.NewLazyDLL("winmm.dll")

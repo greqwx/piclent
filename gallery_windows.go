@@ -31,30 +31,7 @@ type gallery struct {
 }
 
 func newGallery(path string, budget int) *gallery {
-	paths, err := listImages(filepath.Dir(path))
-	if err != nil || len(paths) == 0 {
-		paths = []string{path}
-	}
-
-	index := -1
-	for i, p := range paths {
-		if strings.EqualFold(p, path) {
-			index = i
-			break
-		}
-	}
-	if index < 0 {
-		paths = append(paths, path)
-		sort.Slice(paths, func(i, j int) bool {
-			return strings.ToLower(filepath.Base(paths[i])) < strings.ToLower(filepath.Base(paths[j]))
-		})
-		for i, p := range paths {
-			if strings.EqualFold(p, path) {
-				index = i
-				break
-			}
-		}
-	}
+	paths, index := folderListing(path)
 
 	return &gallery{
 		paths:  paths,
@@ -66,6 +43,41 @@ func newGallery(path string, budget int) *gallery {
 	}
 }
 
+// folderListing builds the sorted folder contents and the index of path
+func folderListing(path string) ([]string, int) {
+	paths, err := listImages(filepath.Dir(path))
+	if err != nil || len(paths) == 0 {
+		paths = []string{path}
+	}
+
+	index := indexOfPath(paths, path)
+	if index < 0 {
+		paths = append(paths, path)
+		sort.Slice(paths, func(i, j int) bool {
+			return strings.ToLower(filepath.Base(paths[i])) < strings.ToLower(filepath.Base(paths[j]))
+		})
+		index = indexOfPath(paths, path)
+	}
+	return paths, index
+}
+
+func indexOfPath(paths []string, path string) int {
+	for i, p := range paths {
+		if strings.EqualFold(p, path) {
+			return i
+		}
+	}
+	return -1
+}
+
+func isImageFile(name string) bool {
+	switch strings.ToLower(filepath.Ext(name)) {
+	case ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp":
+		return true
+	}
+	return false
+}
+
 func listImages(dir string) ([]string, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -73,13 +85,10 @@ func listImages(dir string) ([]string, error) {
 	}
 	paths := make([]string, 0, len(entries))
 	for _, entry := range entries {
-		if entry.IsDir() {
+		if entry.IsDir() || !isImageFile(entry.Name()) {
 			continue
 		}
-		switch strings.ToLower(filepath.Ext(entry.Name())) {
-		case ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp":
-			paths = append(paths, filepath.Join(dir, entry.Name()))
-		}
+		paths = append(paths, filepath.Join(dir, entry.Name()))
 	}
 	sort.Slice(paths, func(i, j int) bool {
 		return strings.ToLower(filepath.Base(paths[i])) < strings.ToLower(filepath.Base(paths[j]))
@@ -252,6 +261,23 @@ func (g *gallery) containsLocked(path string) bool {
 		}
 	}
 	return false
+}
+
+// reset points the gallery at the folder of path and drops the old cache
+func (g *gallery) reset(path string) {
+	paths, index := folderListing(path)
+
+	g.mu.Lock()
+	g.paths = paths
+	g.index = index
+	g.cache = make(map[string]*frame)
+	g.order = nil
+	g.bytes = 0
+	g.errors = make(map[string]string)
+	g.busy = ""
+	g.mu.Unlock()
+
+	g.notify()
 }
 
 // forgetCurrent drops the current entry after its file left the disk and
