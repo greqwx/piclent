@@ -48,6 +48,10 @@ type viewer struct {
 	dragX    int
 	dragY    int
 
+	fullscreen     bool
+	savedStyle     uintptr
+	savedPlacement windowPlacement
+
 	memDC     uintptr
 	memBitmap uintptr
 	memOld    uintptr
@@ -325,6 +329,61 @@ func (v *viewer) setSuspended(suspended bool) {
 	}
 	v.suspended = suspended
 	v.updatePlayback()
+}
+
+func (v *viewer) toggleFullscreen() {
+	if v.fullscreen {
+		v.exitFullscreen()
+	} else {
+		v.enterFullscreen()
+	}
+}
+
+// enterFullscreen covers the current monitor with a borderless topmost window
+func (v *viewer) enterFullscreen() {
+	saved := windowPlacement{length: uint32(unsafe.Sizeof(windowPlacement{}))}
+	if ok, _, _ := procGetWindowPlacement.Call(v.hwnd, uintptr(unsafe.Pointer(&saved))); ok == 0 {
+		return
+	}
+	hMon, _, _ := procMonitorFromWindow.Call(v.hwnd, monitorDefaultToNearest)
+	if hMon == 0 {
+		return
+	}
+	var info monitorInfo
+	info.cbSize = uint32(unsafe.Sizeof(info))
+	if ok, _, _ := procGetMonitorInfoW.Call(hMon, uintptr(unsafe.Pointer(&info))); ok == 0 {
+		return
+	}
+
+	style, _, _ := procGetWindowLongPtrW.Call(v.hwnd, gwlStyle)
+	v.savedStyle = style
+	v.savedPlacement = saved
+	v.fullscreen = true
+
+	procSetWindowLongPtrW.Call(v.hwnd, gwlStyle, wsPopup|wsVisible)
+	procSetWindowPos.Call(
+		v.hwnd, hwndTopmost,
+		uintptr(info.rcMonitor.left), uintptr(info.rcMonitor.top),
+		uintptr(info.rcMonitor.right-info.rcMonitor.left),
+		uintptr(info.rcMonitor.bottom-info.rcMonitor.top),
+		swpFrameChanged|swpShowWindow,
+	)
+}
+
+func (v *viewer) exitFullscreen() {
+	if !v.fullscreen {
+		return
+	}
+	v.fullscreen = false
+
+	procSetWindowLongPtrW.Call(v.hwnd, gwlStyle, v.savedStyle)
+	procSetWindowPlacement.Call(v.hwnd, uintptr(unsafe.Pointer(&v.savedPlacement)))
+	procSetWindowPos.Call(
+		v.hwnd, hwndNotTopmost,
+		0, 0, 0, 0,
+		swpNoMove|swpNoSize|swpNoZOrder|swpFrameChanged|swpShowWindow,
+	)
+	procInvalidateRect.Call(v.hwnd, 0, 0)
 }
 
 func frameDuration(ms int) time.Duration {

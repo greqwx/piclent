@@ -229,6 +229,12 @@ func wndProc(hwnd, msg, wParam, lParam uintptr) uintptr {
 			case vkSpace:
 				v.togglePause()
 				return 0
+			case vkF11:
+				v.toggleFullscreen()
+				return 0
+			case vkEscape:
+				v.exitFullscreen()
+				return 0
 			}
 		}
 

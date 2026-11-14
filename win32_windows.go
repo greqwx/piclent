@@ -7,6 +7,8 @@ import "syscall"
 const (
 	// window styles
 	wsOverlappedWindow = 0x00CF0000
+	wsPopup            = 0x80000000
+	wsVisible          = 0x10000000
 
 	// class styles
 	csHRedraw = 0x0002
@@ -34,11 +36,20 @@ const (
 	sizeMinimized = 1
 
 	// virtual keys
-	vkPrior = 0x21
-	vkNext  = 0x22
-	vkLeft  = 0x25
-	vkRight = 0x27
-	vkSpace = 0x20
+	vkPrior  = 0x21
+	vkNext   = 0x22
+	vkLeft   = 0x25
+	vkRight  = 0x27
+	vkSpace  = 0x20
+	vkEscape = 0x1B
+	vkF11    = 0x7A
+
+	// SetWindowPos
+	swpNoSize       = 0x0001
+	swpNoMove       = 0x0002
+	swpNoZOrder     = 0x0004
+	swpFrameChanged = 0x0020
+	swpShowWindow   = 0x0040
 
 	// hit testing
 	htClient = 1
@@ -53,6 +64,7 @@ const (
 
 	// GetWindowLongPtr index — typed so uintptr cast doesn't overflow
 	gwlUserdata uintptr = ^uintptr(20) // -21 as two's complement uintptr
+	gwlStyle    uintptr = ^uintptr(15) // -16 as two's complement uintptr
 
 	// system colors
 	colorWindow = 5
@@ -83,6 +95,7 @@ const (
 
 	// MonitorFromPoint
 	monitorDefaultToPrimary = 1
+	monitorDefaultToNearest = 2
 
 	// DwmSetWindowAttribute
 	dwmwaUseImmersiveDarkMode = 20
@@ -93,36 +106,40 @@ var (
 	kernel32 = syscall.NewLazyDLL("kernel32.dll")
 	gdi32    = syscall.NewLazyDLL("gdi32.dll")
 
-	procGetModuleHandleW  = kernel32.NewProc("GetModuleHandleW")
-	procGetConsoleWindow  = kernel32.NewProc("GetConsoleWindow")
-	procMessageBoxW       = user32.NewProc("MessageBoxW")
-	procRegisterClassExW  = user32.NewProc("RegisterClassExW")
-	procCreateWindowExW   = user32.NewProc("CreateWindowExW")
-	procShowWindow        = user32.NewProc("ShowWindow")
-	procUpdateWindow      = user32.NewProc("UpdateWindow")
-	procDefWindowProcW    = user32.NewProc("DefWindowProcW")
-	procPostQuitMessage   = user32.NewProc("PostQuitMessage")
-	procGetMessageW       = user32.NewProc("GetMessageW")
-	procTranslateMessage  = user32.NewProc("TranslateMessage")
-	procDispatchMessageW  = user32.NewProc("DispatchMessageW")
-	procPostMessageW      = user32.NewProc("PostMessageW")
-	procGetClientRect     = user32.NewProc("GetClientRect")
-	procInvalidateRect    = user32.NewProc("InvalidateRect")
-	procBeginPaint        = user32.NewProc("BeginPaint")
-	procEndPaint          = user32.NewProc("EndPaint")
-	procSetWindowLongPtrW = user32.NewProc("SetWindowLongPtrW")
-	procGetWindowLongPtrW = user32.NewProc("GetWindowLongPtrW")
-	procSetCapture        = user32.NewProc("SetCapture")
-	procReleaseCapture    = user32.NewProc("ReleaseCapture")
-	procSetCursor         = user32.NewProc("SetCursor")
-	procScreenToClient    = user32.NewProc("ScreenToClient")
-	procAdjustWindowRect  = user32.NewProc("AdjustWindowRect")
-	procLoadCursorW       = user32.NewProc("LoadCursorW")
-	procMonitorFromPoint  = user32.NewProc("MonitorFromPoint")
-	procGetMonitorInfoW   = user32.NewProc("GetMonitorInfoW")
-	procSetWindowTextW    = user32.NewProc("SetWindowTextW")
-	procGetCursorPos      = user32.NewProc("GetCursorPos")
-	procDrawTextW         = user32.NewProc("DrawTextW")
+	procGetModuleHandleW   = kernel32.NewProc("GetModuleHandleW")
+	procGetConsoleWindow   = kernel32.NewProc("GetConsoleWindow")
+	procMessageBoxW        = user32.NewProc("MessageBoxW")
+	procRegisterClassExW   = user32.NewProc("RegisterClassExW")
+	procCreateWindowExW    = user32.NewProc("CreateWindowExW")
+	procShowWindow         = user32.NewProc("ShowWindow")
+	procUpdateWindow       = user32.NewProc("UpdateWindow")
+	procDefWindowProcW     = user32.NewProc("DefWindowProcW")
+	procPostQuitMessage    = user32.NewProc("PostQuitMessage")
+	procGetMessageW        = user32.NewProc("GetMessageW")
+	procTranslateMessage   = user32.NewProc("TranslateMessage")
+	procDispatchMessageW   = user32.NewProc("DispatchMessageW")
+	procPostMessageW       = user32.NewProc("PostMessageW")
+	procGetClientRect      = user32.NewProc("GetClientRect")
+	procInvalidateRect     = user32.NewProc("InvalidateRect")
+	procBeginPaint         = user32.NewProc("BeginPaint")
+	procEndPaint           = user32.NewProc("EndPaint")
+	procSetWindowLongPtrW  = user32.NewProc("SetWindowLongPtrW")
+	procGetWindowLongPtrW  = user32.NewProc("GetWindowLongPtrW")
+	procSetCapture         = user32.NewProc("SetCapture")
+	procReleaseCapture     = user32.NewProc("ReleaseCapture")
+	procSetCursor          = user32.NewProc("SetCursor")
+	procScreenToClient     = user32.NewProc("ScreenToClient")
+	procAdjustWindowRect   = user32.NewProc("AdjustWindowRect")
+	procLoadCursorW        = user32.NewProc("LoadCursorW")
+	procMonitorFromPoint   = user32.NewProc("MonitorFromPoint")
+	procMonitorFromWindow  = user32.NewProc("MonitorFromWindow")
+	procGetMonitorInfoW    = user32.NewProc("GetMonitorInfoW")
+	procSetWindowTextW     = user32.NewProc("SetWindowTextW")
+	procGetCursorPos       = user32.NewProc("GetCursorPos")
+	procDrawTextW          = user32.NewProc("DrawTextW")
+	procSetWindowPos       = user32.NewProc("SetWindowPos")
+	procGetWindowPlacement = user32.NewProc("GetWindowPlacement")
+	procSetWindowPlacement = user32.NewProc("SetWindowPlacement")
 
 	procPatBlt                 = gdi32.NewProc("PatBlt")
 	procBitBlt                 = gdi32.NewProc("BitBlt")
@@ -154,11 +171,26 @@ var (
 	procTimeEndPeriod         = winmm.NewProc("timeEndPeriod")
 )
 
+var (
+	// HWND_TOPMOST/HWND_NOTOPMOST are negative handles passed as integers
+	hwndTopmost    = ^uintptr(0)
+	hwndNotTopmost = ^uintptr(1)
+)
+
 type winRect struct {
 	left   int32
 	top    int32
 	right  int32
 	bottom int32
+}
+
+type windowPlacement struct {
+	length           uint32
+	flags            uint32
+	showCmd          uint32
+	ptMinPosition    point
+	ptMaxPosition    point
+	rcNormalPosition winRect
 }
 
 type wndClassExW struct {
