@@ -53,9 +53,7 @@ func folderListing(path string) ([]string, int) {
 	index := indexOfPath(paths, path)
 	if index < 0 {
 		paths = append(paths, path)
-		sort.Slice(paths, func(i, j int) bool {
-			return strings.ToLower(filepath.Base(paths[i])) < strings.ToLower(filepath.Base(paths[j]))
-		})
+		sortPaths(paths)
 		index = indexOfPath(paths, path)
 	}
 	return paths, index
@@ -78,6 +76,58 @@ func isImageFile(name string) bool {
 	return false
 }
 
+func sortPaths(paths []string) {
+	sort.Slice(paths, func(i, j int) bool {
+		return naturalLess(filepath.Base(paths[i]), filepath.Base(paths[j]))
+	})
+}
+
+// naturalLess compares names so that digit runs count as numbers, keeping
+// photo-2 before photo-10
+func naturalLess(a, b string) bool {
+	a = strings.ToLower(a)
+	b = strings.ToLower(b)
+
+	ai, bi := 0, 0
+	for ai < len(a) && bi < len(b) {
+		if isDigit(a[ai]) && isDigit(b[bi]) {
+			aEnd, bEnd := digitEnd(a, ai), digitEnd(b, bi)
+			aNumber := strings.TrimLeft(a[ai:aEnd], "0")
+			bNumber := strings.TrimLeft(b[bi:bEnd], "0")
+			if len(aNumber) != len(bNumber) {
+				return len(aNumber) < len(bNumber)
+			}
+			if aNumber != bNumber {
+				return aNumber < bNumber
+			}
+			if aEnd-ai != bEnd-bi {
+				return aEnd-ai < bEnd-bi
+			}
+			ai, bi = aEnd, bEnd
+			continue
+		}
+
+		if a[ai] != b[bi] {
+			return a[ai] < b[bi]
+		}
+		ai++
+		bi++
+	}
+	return len(a)-ai < len(b)-bi
+}
+
+func isDigit(c byte) bool {
+	return c >= '0' && c <= '9'
+}
+
+func digitEnd(s string, start int) int {
+	i := start
+	for i < len(s) && isDigit(s[i]) {
+		i++
+	}
+	return i
+}
+
 func listImages(dir string) ([]string, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -90,9 +140,7 @@ func listImages(dir string) ([]string, error) {
 		}
 		paths = append(paths, filepath.Join(dir, entry.Name()))
 	}
-	sort.Slice(paths, func(i, j int) bool {
-		return strings.ToLower(filepath.Base(paths[i])) < strings.ToLower(filepath.Base(paths[j]))
-	})
+	sortPaths(paths)
 	return paths, nil
 }
 
