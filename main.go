@@ -93,7 +93,7 @@ func run() int {
 
 	wc := wndClassExW{
 		cbSize:        uint32(unsafe.Sizeof(wndClassExW{})),
-		style:         csHRedraw | csVRedraw,
+		style:         csHRedraw | csVRedraw | csDblClks,
 		lpfnWndProc:   syscall.NewCallback(wndProc),
 		hInstance:     hInstance,
 		hIcon:         hIcon,
@@ -249,6 +249,12 @@ func wndProc(hwnd, msg, wParam, lParam uintptr) uintptr {
 			case vkDelete:
 				v.deleteCurrent()
 				return 0
+			case vkAdd, vkOemPlus:
+				v.zoomStep(wheelZoomFactor)
+				return 0
+			case vkSubtract, vkOemMinus:
+				v.zoomStep(1 / wheelZoomFactor)
+				return 0
 			}
 		}
 
@@ -282,6 +288,16 @@ func wndProc(hwnd, msg, wParam, lParam uintptr) uintptr {
 				v.dragX, v.dragY = x, y
 				procSetCapture.Call(hwnd)
 				procSetCursor.Call(loadCursor(idcSizeAll))
+			}
+		}
+		return 0
+
+	case wmLButtonDblClk:
+		v := getViewer(hwnd)
+		if v != nil {
+			x, y := mousePoint(lParam)
+			if v.buttonAt(x, y) == 0 {
+				v.toggleActualSize()
 			}
 		}
 		return 0

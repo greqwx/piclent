@@ -77,9 +77,6 @@ func newViewer(hwnd uintptr) *viewer {
 
 // layout returns where the image lands in the client area, clamping the pan
 func (v *viewer) layout(clientWidth, clientHeight int) viewGeometry {
-	if v.zoom < minZoom {
-		v.zoom = minZoom
-	}
 	insetX, insetY := imageInsets(clientWidth, clientHeight)
 	innerWidth := clientWidth - 2*insetX
 	innerHeight := clientHeight - 2*insetY
@@ -156,7 +153,10 @@ func (v *viewer) zoomAt(cursorX, cursorY int, factor float64) {
 		return
 	}
 
-	zoom := math.Min(math.Max(v.zoom*factor, minZoom), maxZoom)
+	// never shrink a small image past its own pixels, large ones stop at fit
+	native := v.zoom / current.scale
+	lowest := math.Min(minZoom, native)
+	zoom := math.Min(math.Max(v.zoom*factor, lowest), maxZoom)
 	if zoom == v.zoom {
 		return
 	}
@@ -173,6 +173,58 @@ func (v *viewer) zoomAt(cursorX, cursorY int, factor float64) {
 	v.offsetY = float64(cursorY) - imageY*scale - float64((height-drawHeight)/2)
 	v.layout(width, height)
 
+	procInvalidateRect.Call(v.hwnd, 0, 0)
+}
+
+// zoomStep zooms around the center of the view
+func (v *viewer) zoomStep(factor float64) {
+	if len(v.pixels) == 0 || v.width <= 0 || v.height <= 0 {
+		return
+	}
+	var rect winRect
+	if ok, _, _ := procGetClientRect.Call(v.hwnd, uintptr(unsafe.Pointer(&rect))); ok == 0 {
+		return
+	}
+	width := int(rect.right - rect.left)
+	height := int(rect.bottom - rect.top)
+	if width <= 0 || height <= 0 {
+		return
+	}
+	v.zoomAt(width/2, height/2, factor)
+}
+
+// toggleActualSize switches between fitting the window and 1:1 pixels
+func (v *viewer) toggleActualSize() {
+	if len(v.pixels) == 0 || v.width <= 0 || v.height <= 0 {
+		return
+	}
+	var rect winRect
+	if ok, _, _ := procGetClientRect.Call(v.hwnd, uintptr(unsafe.Pointer(&rect))); ok == 0 {
+		return
+	}
+	width := int(rect.right - rect.left)
+	height := int(rect.bottom - rect.top)
+	if width <= 0 || height <= 0 {
+		return
+	}
+
+	current := v.layout(width, height)
+	if current.scale <= 0 {
+		return
+	}
+	native := v.zoom / current.scale
+
+	zoom := minZoom
+	if math.Abs(v.zoom-minZoom) < 0.001 {
+		zoom = math.Min(math.Max(native, 0.001), maxZoom)
+	}
+	if zoom == v.zoom {
+		return
+	}
+
+	v.zoom = zoom
+	v.offsetX = 0
+	v.offsetY = 0
 	procInvalidateRect.Call(v.hwnd, 0, 0)
 }
 

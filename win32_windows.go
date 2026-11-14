@@ -13,6 +13,7 @@ const (
 	// class styles
 	csHRedraw = 0x0002
 	csVRedraw = 0x0001
+	csDblClks = 0x0008
 
 	// window messages
 	wmDestroy        = 0x0002
@@ -25,6 +26,7 @@ const (
 	wmMouseMove      = 0x0200
 	wmLButtonDown    = 0x0201
 	wmLButtonUp      = 0x0202
+	wmLButtonDblClk  = 0x0203
 	wmRButtonDown    = 0x0204
 	wmRButtonUp      = 0x0205
 	wmMouseWheel     = 0x020A
@@ -45,6 +47,12 @@ const (
 	vkEscape = 0x1B
 	vkF11    = 0x7A
 	vkDelete = 0x2E
+
+	// zoom keys
+	vkAdd      = 0x6B
+	vkSubtract = 0x6D
+	vkOemPlus  = 0xBB
+	vkOemMinus = 0xBD
 
 	// SHFileOperationW
 	foDelete          = 0x0003
