@@ -36,7 +36,7 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
           GOOS: windows
           CGO_ENABLED: 0
-        run: go build -pgo=default.pgo -trimpath -ldflags="-H windowsgui -s -w" -o piclent-${{ matrix.goarch }}.exe .
+        run: go build "-pgo=default.pgo" -trimpath -ldflags="-H windowsgui -s -w" -o piclent-${{ matrix.goarch }}.exe .
 
       - name: Upload artifact
         uses: actions/upload-artifact@v6
