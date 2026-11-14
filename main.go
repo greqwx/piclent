@@ -5,6 +5,7 @@ package main
 import (
 	"bytes"
 	_ "embed"
+	"encoding/binary"
 	"fmt"
 	"image"
 	"image/color"
@@ -12,6 +13,7 @@ import (
 	"image/gif"
 	_ "image/jpeg"
 	_ "image/png"
+	"io"
 	"math"
 	"os"
 	"path/filepath"
@@ -380,11 +382,126 @@ func readConfig(path string) (image.Config, error) {
 	}
 	defer file.Close()
 
+	ext := strings.ToLower(filepath.Ext(path))
+	orientation := 1
+	if ext == ".jpg" || ext == ".jpeg" {
+		orientation = jpegOrientation(file)
+		if _, err := file.Seek(0, io.SeekStart); err != nil {
+			return image.Config{}, err
+		}
+	}
+
 	config, _, err := image.DecodeConfig(file)
 	if err != nil {
 		return image.Config{}, fmt.Errorf("%s: %w", path, err)
 	}
+	if orientation >= 5 && orientation <= 8 {
+		config.Width, config.Height = config.Height, config.Width
+	}
 	return config, nil
+}
+
+// jpegOrientation walks the JPEG segments and returns the EXIF orientation,
+// 1 when the file has none. It leaves the read position somewhere in the file.
+func jpegOrientation(file *os.File) int {
+	var header [2]byte
+	if _, err := io.ReadFull(file, header[:]); err != nil || header[0] != 0xff || header[1] != 0xd8 {
+		return 1
+	}
+
+	for {
+		var b [1]byte
+		for {
+			if _, err := io.ReadFull(file, b[:]); err != nil {
+				return 1
+			}
+			if b[0] != 0xff {
+				return 1
+			}
+			if _, err := io.ReadFull(file, b[:]); err != nil {
+				return 1
+			}
+			if b[0] != 0xff {
+				break
+			}
+		}
+
+		marker := b[0]
+		switch {
+		case marker == 0xd8 || marker == 0x01 || (marker >= 0xd0 && marker <= 0xd7):
+			continue
+		case marker == 0xd9 || marker == 0xda:
+			return 1
+		}
+
+		var sizeBytes [2]byte
+		if _, err := io.ReadFull(file, sizeBytes[:]); err != nil {
+			return 1
+		}
+		size := int(binary.BigEndian.Uint16(sizeBytes[:]))
+		if size < 2 {
+			return 1
+		}
+
+		if marker != 0xe1 {
+			if _, err := file.Seek(int64(size-2), io.SeekCurrent); err != nil {
+				return 1
+			}
+			continue
+		}
+
+		payload := make([]byte, size-2)
+		if _, err := io.ReadFull(file, payload); err != nil {
+			return 1
+		}
+		if len(payload) >= 6 && string(payload[:4]) == "Exif" && payload[4] == 0 && payload[5] == 0 {
+			return exifOrientation(payload[6:])
+		}
+	}
+}
+
+// exifOrientation reads the orientation tag from an APP1 payload holding a TIFF
+// header, returning 1 when it is missing or unreadable
+func exifOrientation(tiff []byte) int {
+	if len(tiff) < 8 {
+		return 1
+	}
+
+	var order binary.ByteOrder
+	switch string(tiff[:2]) {
+	case "II":
+		order = binary.LittleEndian
+	case "MM":
+		order = binary.BigEndian
+	default:
+		return 1
+	}
+	if order.Uint16(tiff[2:]) != 42 {
+		return 1
+	}
+
+	ifd := int(order.Uint32(tiff[4:]))
+	if ifd < 8 || ifd+2 > len(tiff) {
+		return 1
+	}
+	count := int(order.Uint16(tiff[ifd:]))
+	for i := 0; i < count; i++ {
+		entry := ifd + 2 + i*12
+		if entry+12 > len(tiff) {
+			return 1
+		}
+		if order.Uint16(tiff[entry:]) != 0x0112 {
+			continue
+		}
+		if order.Uint16(tiff[entry+2:]) != 3 || order.Uint32(tiff[entry+4:]) != 1 {
+			return 1
+		}
+		if value := int(order.Uint16(tiff[entry+8:])); value >= 2 && value <= 8 {
+			return value
+		}
+		return 1
+	}
+	return 1
 }
 
 var (
@@ -402,6 +519,14 @@ func loadFrame(path string, maxWidth, maxHeight, animCap int, full bool) (*frame
 	defer file.Close()
 
 	ext := strings.ToLower(filepath.Ext(path))
+
+	orientation := 1
+	if ext == ".jpg" || ext == ".jpeg" {
+		orientation = jpegOrientation(file)
+		if _, err := file.Seek(0, io.SeekStart); err != nil {
+			return nil, err
+		}
+	}
 
 	switch {
 	case ext == ".gif" && full:
@@ -429,17 +554,18 @@ func loadFrame(path string, maxWidth, maxHeight, animCap int, full bool) (*frame
 		return nil, fmt.Errorf("%s: %w", path, err)
 	}
 
-	f := stillFrame(img, maxWidth, maxHeight)
+	f := stillFrame(img, orientation, maxWidth, maxHeight)
 	// only the first frame is decoded here, the animation waits until it is opened
 	f.partial = (ext == ".gif" || ext == ".webp") && !full
 	return f, nil
 }
 
-func stillFrame(img image.Image, maxWidth, maxHeight int) *frame {
+func stillFrame(img image.Image, orientation, maxWidth, maxHeight int) *frame {
 	bounds := img.Bounds()
 	rgba := image.NewRGBA(image.Rect(0, 0, bounds.Dx(), bounds.Dy()))
 	draw.Draw(rgba, rgba.Bounds(), backgroundUniform, image.Point{}, draw.Src)
 	draw.Draw(rgba, rgba.Bounds(), img, bounds.Min, draw.Over)
+	rgba = orientRGBA(rgba, orientation)
 
 	width, height := rgba.Bounds().Dx(), rgba.Bounds().Dy()
 	if scale := fitScale(width, height, maxWidth, maxHeight); scale < 1 {
@@ -452,6 +578,45 @@ func stillFrame(img image.Image, maxWidth, maxHeight int) *frame {
 		width:  width,
 		height: height,
 	}
+}
+
+// orientRGBA rearranges pixels the way the EXIF orientation tag says; values
+// 5..8 swap the width and height
+func orientRGBA(src *image.RGBA, orientation int) *image.RGBA {
+	width, height := src.Bounds().Dx(), src.Bounds().Dy()
+	if orientation < 2 || orientation > 8 || width < 1 || height < 1 {
+		return src
+	}
+
+	dstWidth, dstHeight := width, height
+	if orientation >= 5 {
+		dstWidth, dstHeight = height, width
+	}
+	dst := image.NewRGBA(image.Rect(0, 0, dstWidth, dstHeight))
+
+	for y := 0; y < dstHeight; y++ {
+		for x := 0; x < dstWidth; x++ {
+			var sx, sy int
+			switch orientation {
+			case 2:
+				sx, sy = width-1-x, y
+			case 3:
+				sx, sy = width-1-x, height-1-y
+			case 4:
+				sx, sy = x, height-1-y
+			case 5:
+				sx, sy = y, x
+			case 6:
+				sx, sy = y, height-1-x
+			case 7:
+				sx, sy = width-1-y, height-1-x
+			case 8:
+				sx, sy = width-1-y, x
+			}
+			copy(dst.Pix[y*dst.Stride+x*4:y*dst.Stride+x*4+4], src.Pix[sy*src.Stride+sx*4:])
+		}
+	}
+	return dst
 }
 
 // gifFrame composites every GIF frame into a full canvas and hands the sequence
@@ -533,7 +698,7 @@ type animationSource struct {
 // memory cap allows
 func prepareAnimation(src animationSource, maxWidth, maxHeight, animCap int) *frame {
 	if src.count == 1 {
-		return stillFrame(src.frameAt(0), maxWidth, maxHeight)
+		return stillFrame(src.frameAt(0), 1, maxWidth, maxHeight)
 	}
 
 	scale := fitScale(src.width, src.height, maxWidth, maxHeight)
