@@ -11,8 +11,8 @@
   #define AppVersionNumeric "0.0.0.0"
 #endif
 
-; Name shown by the shell (Open with, Default apps, Apps & features). Registry keys,
-; the exe and the install folder stay lowercase: they are identifiers, not labels.
+; Name shown by the shell (Open with, Default apps, Apps & features). Registry keys
+; and the exe stay lowercase: they are identifiers, not labels.
 #define AppDisplayName "Piclent"
 
 [Setup]
@@ -22,7 +22,7 @@ AppVersion={#AppVersion}
 AppVerName={#AppDisplayName} {#AppVersion}
 AppPublisher=Greg
 AppCopyright=Copyright (c) 2026 Greg and Contributors
-DefaultDirName={autopf}\piclent
+DefaultDirName={autopf}\Piclent
 DefaultGroupName={#AppDisplayName}
 DisableProgramGroupPage=yes
 PrivilegesRequired=lowest
