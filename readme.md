@@ -6,15 +6,7 @@
   A tiny image viewer for Windows.
 </p>
 
-## Install
-Get `piclent-VERSION-setup.exe` in Releases.
-
-## Build
-
-```
-cargo build --release
-```
-
-## License
-Copyright (c) 2026 Greg and Contributors<br>
-MIT, see [license.txt](license.txt).
+<p align="center">
+  <a href="https://github.com/greqwx/piclent/releases/latest">Install</a> •
+  <a href="license.txt">License</a>
+</p>
