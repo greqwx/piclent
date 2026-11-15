@@ -11,10 +11,8 @@ Get `piclent-VERSION-setup.exe` in Releases.
 
 ## Build
 
-Go 1.21 or newer:
-
 ```
-go build -trimpath -ldflags="-H windowsgui -s -w" -o piclent.exe .
+cargo build --release
 ```
 
 ## License

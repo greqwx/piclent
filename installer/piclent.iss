@@ -1,3 +1,4 @@
+; Copyright (c) 2026 Greg
 ; piclent installer.
 ; Compile: ISCC.exe /DAppVersion=1.2.3 /DAppVersionNumeric=1.2.3 piclent.iss
 ; Expects payload\piclent-amd64.exe and payload\piclent-arm64.exe next to this file.

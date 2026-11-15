@@ -14,35 +14,35 @@ jobs:
       # one arch failing must not kill the other one mid-flight
       fail-fast: false
       matrix:
-        goarch:
-          - amd64
-          - arm64
+        include:
+          - arch: amd64
+            target: x86_64-pc-windows-msvc
+          - arch: arm64
+            target: aarch64-pc-windows-msvc
 
     steps:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-go@v6
+      - uses: dtolnay/rust-toolchain@stable
         with:
-          go-version-file: go.mod
-
-      - name: Generate syso (embed icon)
-        shell: bash
-        run: go run github.com/akavel/rsrc@v0.10.2 -arch ${{ matrix.goarch }} -ico assets/icon.ico
+          targets: ${{ matrix.target }}
 
       - name: Build
-        env:
-          GOARCH: ${{ matrix.goarch }}
-          GOOS: windows
-          CGO_ENABLED: 0
-        run: go build "-pgo=default.pgo" -trimpath -ldflags="-H windowsgui -s -w" -o piclent-${{ matrix.goarch }}.exe .
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      - name: Rename binary
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp "target/${{ matrix.target }}/release/piclent.exe" "dist/piclent-${{ matrix.arch }}.exe"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v6
         with:
-          name: piclent-${{ matrix.goarch }}
-          path: piclent-${{ matrix.goarch }}.exe
+          name: piclent-${{ matrix.arch }}
+          path: dist/piclent-${{ matrix.arch }}.exe
 
   installer:
     needs: build

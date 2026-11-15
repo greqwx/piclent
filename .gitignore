@@ -1,4 +1,4 @@
+.local/
 *.exe
 *.zip
-.local/
-.syso
+target/
