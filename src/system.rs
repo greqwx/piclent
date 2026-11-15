@@ -1,17 +1,19 @@
 // Copyright (c) 2026 Greg
 use std::mem::size_of;
 
+use windows_sys::Win32::Foundation::{GlobalFree, HWND, POINT};
 use windows_sys::Win32::Graphics::Gdi::{CreateBitmap, DeleteObject};
 use windows_sys::Win32::System::Console::GetConsoleWindow;
 use windows_sys::Win32::UI::Controls::Dialogs::{
     GetOpenFileNameW, OFN_EXPLORER, OFN_FILEMUSTEXIST, OFN_HIDEREADONLY, OFN_NOCHANGEDIR,
     OFN_PATHMUSTEXIST, OPENFILENAMEW,
 };
+use windows_sys::Win32::UI::Shell::DROPFILES;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CreateIconIndirect, MessageBoxW, HICON, ICONINFO, MB_ICONERROR,
 };
 
-use crate::win32::wide;
+use crate::win32::{file_name, wide};
 
 // asks for an image file, an empty result means the dialog was cancelled
 pub fn open_image_dialog() -> Option<String> {
@@ -54,6 +56,67 @@ fn utf16_filter(parts: &[&str]) -> Vec<u16> {
     }
     out.push(0);
     out
+}
+
+// hands the file to the clipboard as a drop list, the way explorer's copy does
+pub fn copy_path_to_clipboard(hwnd: HWND, path: &str) -> Result<(), String> {
+    use windows_sys::Win32::System::DataExchange::{
+        CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData,
+    };
+    use windows_sys::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE};
+
+    // cf_hdrop from winuser.h, the shell format for a list of dropped files
+    const CF_HDROP: u32 = 15;
+
+    let absolute = std::path::absolute(path).map_err(|err| err.to_string())?;
+    let text: Vec<u16> = absolute.to_string_lossy().encode_utf16().collect();
+    let header = size_of::<DROPFILES>();
+    let size = header + (text.len() + 2) * size_of::<u16>();
+
+    unsafe {
+        let handle = GlobalAlloc(GMEM_MOVEABLE, size);
+        if handle.is_null() {
+            return Err("cannot allocate clipboard data".to_string());
+        }
+
+        let memory = GlobalLock(handle);
+        if memory.is_null() {
+            GlobalFree(handle);
+            return Err("cannot lock the clipboard data".to_string());
+        }
+
+        let drop = memory as *mut DROPFILES;
+        (*drop).pFiles = header as u32;
+        (*drop).pt = POINT { x: 0, y: 0 };
+        (*drop).fNC = 0;
+        (*drop).fWide = 1;
+
+        // the path follows the header and ends with an empty string
+        let files = memory.cast::<u8>().add(header) as *mut u16;
+        std::ptr::copy_nonoverlapping(text.as_ptr(), files, text.len());
+        *files.add(text.len()) = 0;
+        *files.add(text.len() + 1) = 0;
+
+        GlobalUnlock(handle);
+
+        if OpenClipboard(hwnd) == 0 {
+            GlobalFree(handle);
+            return Err("another program is using the clipboard".to_string());
+        }
+
+        // a stored handle belongs to the clipboard, a failed one is still ours
+        let stored = EmptyClipboard() != 0 && !SetClipboardData(CF_HDROP, handle).is_null();
+        CloseClipboard();
+        if !stored {
+            GlobalFree(handle);
+            return Err(format!(
+                "cannot copy {} to the clipboard",
+                file_name(path)
+            ));
+        }
+    }
+
+    Ok(())
 }
 
 pub fn fatal(message: &str) {

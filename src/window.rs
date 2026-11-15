@@ -2,8 +2,8 @@
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, WPARAM};
 use windows_sys::Win32::Graphics::Gdi::{BeginPaint, EndPaint, ScreenToClient, PAINTSTRUCT};
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-    VK_ADD, VK_DELETE, VK_ESCAPE, VK_F11, VK_LEFT, VK_NEXT, VK_OEM_MINUS, VK_OEM_PLUS, VK_PRIOR,
-    VK_RIGHT, VK_SPACE, VK_SUBTRACT,
+    GetKeyState, VK_ADD, VK_C, VK_CONTROL, VK_DELETE, VK_ESCAPE, VK_F11, VK_INSERT, VK_LEFT,
+    VK_NEXT, VK_OEM_MINUS, VK_OEM_PLUS, VK_PRIOR, VK_RIGHT, VK_SPACE, VK_SUBTRACT,
 };
 use windows_sys::Win32::UI::Shell::{DragFinish, DragQueryFileW, HDROP};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
@@ -85,6 +85,12 @@ pub unsafe extern "system" fn wnd_proc(
         WM_KEYDOWN => {
             if let Some(viewer) = viewer(hwnd) {
                 let key = wparam as u16;
+                if key == VK_C || key == VK_INSERT {
+                    if GetKeyState(VK_CONTROL as i32) < 0 {
+                        viewer.copy_current();
+                        return 0;
+                    }
+                }
                 if key == VK_LEFT || key == VK_PRIOR {
                     viewer.navigate(-1);
                     return 0;

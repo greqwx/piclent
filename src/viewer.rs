@@ -462,6 +462,26 @@ impl Viewer {
         self.refresh();
     }
 
+    // puts the open file on the clipboard for pasting elsewhere
+    pub fn copy_current(&mut self) {
+        let path = self.gallery.current_path();
+        if path.is_empty() {
+            return;
+        }
+
+        let Err(message) = crate::system::copy_path_to_clipboard(self.hwnd, &path) else {
+            return;
+        };
+        self.message = message;
+        self.pixels = Arc::new(Vec::new());
+        self.width = 0;
+        self.height = 0;
+        self.anim = None;
+        self.anim_frame = 0;
+        self.stop_playback();
+        invalidate(self.hwnd);
+    }
+
     // switches to a file dropped onto the window
     pub fn open_path(&mut self, path: &str) {
         self.gallery.reset(path);
