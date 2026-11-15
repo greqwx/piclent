@@ -46,27 +46,43 @@ pub fn load(
     if full {
         match ext.as_str() {
             "gif" => return crate::animation::from_gif(path, max_width, max_height, anim_cap),
-            "webp" => return crate::animation::from_webp(path, max_width, max_height, anim_cap),
+            "webp" => {
+                return crate::animation::from_webp(path, max_width, max_height, anim_cap, true)
+            }
             _ => {}
         }
+    } else if ext == "webp" {
+        // the image crate cannot read webp, so neighbours get their first frame here
+        return crate::animation::from_webp(path, max_width, max_height, anim_cap, false);
     }
 
     let mut frame = still(path, orientation, max_width, max_height)?;
     // only the first frame is decoded here, the animation waits until it is opened
-    frame.partial = (ext == "gif" || ext == "webp") && !full;
+    frame.partial = ext == "gif" && !full;
     Ok(frame)
 }
 
 pub fn image_size(path: &Path) -> Result<(u32, u32), String> {
+    let ext = extension(path);
+    if ext == "webp" {
+        return webp_size(path);
+    }
+
     let decoder = open_decoder(path)?;
     let (width, height) = decoder.dimensions();
-    let ext = extension(path);
     let orientation = if ext == "jpg" || ext == "jpeg" {
         jpeg_orientation(path).unwrap_or(1)
     } else {
         1
     };
     Ok(display_size(width, height, orientation))
+}
+
+fn webp_size(path: &Path) -> Result<(u32, u32), String> {
+    let reader = open_reader(path)?;
+    let decoder = image_webp::WebPDecoder::new(reader)
+        .map_err(|err| format!("{}: {}", path.display(), err))?;
+    Ok(decoder.dimensions())
 }
 
 fn open_decoder(path: &Path) -> Result<impl image::ImageDecoder, String> {

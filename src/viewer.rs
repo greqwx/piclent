@@ -7,11 +7,11 @@ use windows_sys::Win32::Foundation::{HWND, RECT};
 use windows_sys::Win32::Graphics::Gdi::{
     AlphaBlend, BeginPaint, BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, CreateDIBSection,
     CreateSolidBrush, DeleteDC, DeleteObject, DrawTextW, EndPaint, FillRect, GetDC,
-    GetMonitorInfoW, GetStockObject, MonitorFromWindow, ReleaseDC, SelectObject, SetBkMode,
-    SetBrushOrgEx, SetStretchBltMode, SetTextColor, StretchDIBits, AC_SRC_ALPHA, BITMAPINFO,
-    BITMAPINFOHEADER, BLENDFUNCTION, DEFAULT_GUI_FONT, DIB_RGB_COLORS, DT_CALCRECT, DT_CENTER,
-    DT_WORDBREAK, HALFTONE, HBITMAP, HDC, HGDIOBJ, MONITORINFO, MONITOR_DEFAULTTONEAREST,
-    PAINTSTRUCT, SRCCOPY, TRANSPARENT,
+    GetMonitorInfoW, GetStockObject, IntersectClipRect, MonitorFromWindow, ReleaseDC, RestoreDC,
+    SaveDC, SelectObject, SetBkMode, SetBrushOrgEx, SetStretchBltMode, SetTextColor,
+    StretchDIBits, AC_SRC_ALPHA, BITMAPINFO, BITMAPINFOHEADER, BLENDFUNCTION, DEFAULT_GUI_FONT,
+    DIB_RGB_COLORS, DT_CALCRECT, DT_CENTER, DT_NOPREFIX, DT_WORDBREAK, HALFTONE, HBITMAP, HDC,
+    HGDIOBJ, MONITORINFO, MONITOR_DEFAULTTONEAREST, PAINTSTRUCT, SRCCOPY, TRANSPARENT,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     GetWindowLongPtrW, GetWindowPlacement, PostMessageW, SetWindowLongPtrW, SetWindowPlacement,
@@ -21,6 +21,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 
 use crate::animation::{Animation, Playback};
 use crate::gallery::{recycle_file, Gallery};
+use crate::metadata::Field;
 use crate::win32::{self, invalidate, wide, IMAGE_INSET_X, IMAGE_INSET_Y};
 
 pub const MIN_ZOOM: f64 = 1.0;
@@ -36,6 +37,14 @@ const BACKGROUND_COLOR: u32 = 0x28201c;
 const MESSAGE_COLOR: u32 = 0x00e0e0e0;
 const NAV_BUTTON_COLOR: u32 = 0x003c312c;
 const NAV_ARROW_COLOR: u32 = 0x00efe9e6;
+
+const INFO_WIDTH: i32 = 340;
+const INFO_PADDING: i32 = 16;
+const INFO_GAP: i32 = 10;
+const INFO_LINE: i32 = 48;
+const INFO_PANEL_COLOR: u32 = 0x00261e1a;
+const INFO_LABEL_COLOR: u32 = 0x00a39a93;
+const INFO_VALUE_COLOR: u32 = 0x00efe9e6;
 
 pub struct Viewer {
     hwnd: HWND,
@@ -59,6 +68,10 @@ pub struct Viewer {
     dragging: bool,
     drag_x: i32,
     drag_y: i32,
+
+    info_open: bool,
+    info: Arc<Vec<Field>>,
+    info_scroll: i32,
 
     fullscreen: bool,
     saved_style: isize,
@@ -104,6 +117,9 @@ impl Viewer {
             dragging: false,
             drag_x: 0,
             drag_y: 0,
+            info_open: false,
+            info: Arc::new(Vec::new()),
+            info_scroll: 0,
             fullscreen: false,
             saved_style: 0,
             saved_placement: unsafe { std::mem::zeroed() },
@@ -267,6 +283,7 @@ impl Viewer {
         self.paused = false;
         self.update_title();
         self.refresh();
+        self.refresh_info();
     }
 
     pub fn update_title(&self) {
@@ -357,6 +374,64 @@ impl Viewer {
         }
         self.suspended = suspended;
         self.update_playback();
+    }
+
+    pub fn toggle_info(&mut self) {
+        if self.info_open {
+            self.close_info();
+            return;
+        }
+        let path = self.gallery.current_path();
+        if path.is_empty() {
+            return;
+        }
+        self.info = self.gallery.metadata(&path);
+        self.info_open = true;
+        self.info_scroll = 0;
+        invalidate(self.hwnd);
+    }
+
+    // reports whether the panel was open, so escape can fall through to fullscreen
+    pub fn close_info(&mut self) -> bool {
+        if !self.info_open {
+            return false;
+        }
+        self.info_open = false;
+        invalidate(self.hwnd);
+        true
+    }
+
+    pub fn is_info_open(&self) -> bool {
+        self.info_open
+    }
+
+    // positive pixels move the text up, the paint pass clamps the range
+    pub fn scroll_info(&mut self, pixels: i32) {
+        if !self.info_open {
+            return;
+        }
+        self.info_scroll = (self.info_scroll - pixels).max(0);
+        invalidate(self.hwnd);
+    }
+
+    pub fn scroll_info_page(&mut self, pages: i32) {
+        let step = win32::client_size(self.hwnd)
+            .map(|(_, height)| (height - 3 * INFO_PADDING).max(INFO_LINE))
+            .unwrap_or(INFO_LINE);
+        self.scroll_info(step * pages);
+    }
+
+    fn refresh_info(&mut self) {
+        if !self.info_open {
+            return;
+        }
+        let path = self.gallery.current_path();
+        if path.is_empty() {
+            self.info_open = false;
+            return;
+        }
+        self.info = self.gallery.metadata(&path);
+        self.info_scroll = 0;
     }
 
     pub fn toggle_fullscreen(&mut self) {
@@ -460,6 +535,7 @@ impl Viewer {
         self.paused = false;
         self.update_title();
         self.refresh();
+        self.refresh_info();
     }
 
     // puts the open file on the clipboard for pasting elsewhere
@@ -499,6 +575,7 @@ impl Viewer {
         self.stop_playback();
         self.update_title();
         self.refresh();
+        self.refresh_info();
     }
 
     pub fn pan(&mut self, dx: i32, dy: i32) {
@@ -646,6 +723,10 @@ impl Viewer {
             }
         }
 
+        if self.info_open {
+            self.draw_info_panel(target, width, height);
+        }
+
         if self.has_navigation() {
             let (previous, next) = nav_button_rects(width, height);
             self.draw_nav_button(target, previous, -1);
@@ -656,6 +737,91 @@ impl Viewer {
             unsafe {
                 BitBlt(hdc, 0, 0, width, height, target, 0, 0, SRCCOPY);
             }
+        }
+    }
+
+    fn draw_info_panel(&mut self, hdc: HDC, width: i32, height: i32) {
+        let panel_width = INFO_WIDTH.min(width * 2 / 3).max(1);
+        let left = width - panel_width;
+        let text_width = panel_width - 3 * INFO_PADDING;
+        let label_width = text_width * 2 / 5;
+        let value_width = text_width - label_width;
+        if label_width <= 0 || value_width <= 0 || height <= 2 * INFO_PADDING {
+            return;
+        }
+
+        unsafe {
+            let brush = CreateSolidBrush(INFO_PANEL_COLOR);
+            let rect = RECT {
+                left,
+                top: 0,
+                right: width,
+                bottom: height,
+            };
+            FillRect(hdc, &rect, brush);
+            DeleteObject(brush);
+        }
+
+        let rows: Vec<(Vec<u16>, Vec<u16>)> = self
+            .info
+            .iter()
+            .map(|field| (wide(&field.label), wide(&field.value)))
+            .collect();
+        if rows.is_empty() {
+            return;
+        }
+
+        unsafe {
+            let font = GetStockObject(DEFAULT_GUI_FONT);
+            SaveDC(hdc);
+            SelectObject(hdc, font);
+            SetBkMode(hdc, TRANSPARENT as i32);
+        }
+
+        let mut heights = Vec::with_capacity(rows.len());
+        let mut total = INFO_GAP;
+        for (label, value) in &rows {
+            let row = unsafe { text_height(hdc, label, label_width) }
+                .max(unsafe { text_height(hdc, value, value_width) });
+            heights.push(row);
+            total += row + INFO_GAP;
+        }
+
+        let max_scroll = (total - (height - 2 * INFO_PADDING)).max(0);
+        if self.info_scroll > max_scroll {
+            self.info_scroll = max_scroll;
+        }
+
+        unsafe {
+            IntersectClipRect(
+                hdc,
+                left + INFO_PADDING,
+                INFO_PADDING,
+                width - INFO_PADDING,
+                height - INFO_PADDING,
+            );
+        }
+
+        let mut y = INFO_PADDING - self.info_scroll;
+        for ((label, value), row_height) in rows.iter().zip(heights.iter()) {
+            if y + row_height > INFO_PADDING && y < height - INFO_PADDING {
+                unsafe {
+                    draw_text(hdc, label, left + INFO_PADDING, y, label_width, INFO_LABEL_COLOR);
+                    draw_text(
+                        hdc,
+                        value,
+                        left + 2 * INFO_PADDING + label_width,
+                        y,
+                        value_width,
+                        INFO_VALUE_COLOR,
+                    );
+                }
+            }
+            y += row_height + INFO_GAP;
+        }
+
+        unsafe {
+            RestoreDC(hdc, -1);
         }
     }
 
@@ -987,6 +1153,39 @@ fn nav_button_rects(width: i32, height: i32) -> (RECT, RECT) {
 
 fn point_in_rect(rect: &RECT, x: i32, y: i32) -> bool {
     x >= rect.left && x < rect.right && y >= rect.top && y < rect.bottom
+}
+
+unsafe fn text_height(hdc: HDC, text: &[u16], width: i32) -> i32 {
+    let mut rect = RECT {
+        left: 0,
+        top: 0,
+        right: width,
+        bottom: 0,
+    };
+    DrawTextW(
+        hdc,
+        text.as_ptr(),
+        -1,
+        &mut rect,
+        DT_CALCRECT | DT_WORDBREAK | DT_NOPREFIX,
+    )
+}
+
+unsafe fn draw_text(hdc: HDC, text: &[u16], x: i32, y: i32, width: i32, color: u32) {
+    SetTextColor(hdc, color);
+    let mut rect = RECT {
+        left: x,
+        top: y,
+        right: x + width,
+        bottom: y + 2000,
+    };
+    DrawTextW(
+        hdc,
+        text.as_ptr(),
+        -1,
+        &mut rect,
+        DT_WORDBREAK | DT_NOPREFIX,
+    );
 }
 
 fn draw_message(hdc: HDC, width: i32, height: i32, message: &str) {

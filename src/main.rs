@@ -4,6 +4,7 @@
 mod animation;
 mod decode;
 mod gallery;
+mod metadata;
 mod system;
 mod viewer;
 mod win32;

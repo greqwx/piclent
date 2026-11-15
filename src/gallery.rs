@@ -8,6 +8,7 @@ use windows_sys::Win32::Foundation::HWND;
 use windows_sys::Win32::UI::WindowsAndMessaging::PostMessageW;
 
 use crate::decode::{self, Frame};
+use crate::metadata::Field;
 use crate::win32::WM_USER_FRAME;
 
 const PREFETCH_RADIUS: isize = 2;
@@ -27,6 +28,7 @@ struct State {
     bytes: usize,
     budget: usize,
     errors: HashMap<String, String>,
+    info: HashMap<String, Arc<Vec<Field>>>,
     busy: Option<String>,
 }
 
@@ -43,6 +45,7 @@ impl Gallery {
                 bytes: 0,
                 budget,
                 errors: HashMap::new(),
+                info: HashMap::new(),
                 busy: None,
             })),
             signal: Arc::new((Mutex::new(false), Condvar::new())),
@@ -168,6 +171,21 @@ impl Gallery {
             .unwrap_or_default()
     }
 
+    // reads the metadata once per file and keeps it until the folder changes
+    pub fn metadata(&self, path: &str) -> Arc<Vec<Field>> {
+        if let Ok(state) = self.state.lock() {
+            if let Some(fields) = state.info.get(path) {
+                return Arc::clone(fields);
+            }
+        }
+
+        let fields = Arc::new(crate::metadata::read(Path::new(path)));
+        if let Ok(mut state) = self.state.lock() {
+            state.info.insert(path.to_string(), Arc::clone(&fields));
+        }
+        fields
+    }
+
     // points the gallery at the folder of path and drops the old cache
     pub fn reset(&self, path: &str) {
         let (paths, index) = folder_listing(path);
@@ -178,6 +196,7 @@ impl Gallery {
             state.order.clear();
             state.bytes = 0;
             state.errors.clear();
+            state.info.clear();
             state.busy = None;
         }
         self.notify();
@@ -306,6 +325,7 @@ impl State {
         }
         self.order.retain(|known| known != &path);
         self.errors.remove(&path);
+        self.info.remove(&path);
         if self.index >= self.paths.len() {
             self.index = self.paths.len().saturating_sub(1);
         }

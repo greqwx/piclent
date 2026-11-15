@@ -267,6 +267,7 @@ pub fn from_webp(
     max_width: u32,
     max_height: u32,
     anim_cap: usize,
+    full: bool,
 ) -> Result<Frame, String> {
     let reader = decode::open_reader(path)?;
     let mut decoder = image_webp::WebPDecoder::new(reader)
@@ -282,7 +283,7 @@ pub fn from_webp(
         .output_buffer_size()
         .ok_or_else(|| format!("{}: image is too large", path.display()))?;
 
-    if !decoder.is_animated() || decoder.num_frames() <= 1 {
+    if !full || !decoder.is_animated() || decoder.num_frames() <= 1 {
         let mut buffer = vec![0u8; frame_bytes];
         decoder
             .read_image(&mut buffer)
@@ -302,7 +303,7 @@ pub fn from_webp(
             width: draw_width,
             height: draw_height,
             anim: None,
-            partial: false,
+            partial: !full,
         });
     }
 
